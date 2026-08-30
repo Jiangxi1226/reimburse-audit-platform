@@ -1,0 +1,46 @@
+{
+  "currency": "CNY",
+  "title": "差旅与费用报销规则库",
+  "last_updated": "2026-08-30",
+  "submission_window_days": 30,
+  "receipt_threshold": 200,
+  "red_flags": {
+    "clear_personal": ["个人护理", "个人用品", "礼物", "服饰", "化妆品", "手机", "数码", "护肤", "面膜", "美容", "个人"],
+    "non_travel": ["美容", "会所", "休闲会所", "礼品店", "商场", "超市", "便利店"],
+    "generic_itemization": ["杂项", "其他", "机动", "待定", "零星"],
+    "cash_no_reason": "现金支付且无业务说明"
+  },
+  "non_reimbursable_categories": ["个人消费", "娱乐消费", "罚款", "礼品", "家庭账单"],
+
+  "supplier_blacklist": ["XX商贸", "XX会所", "金玉轩", "鼎盛礼品", "风尚商行"],
+  "invoice_uniqueness": {
+    "enabled": true,
+    "dup_severity": "high",
+    "note": "同一发票号不可重复报销：引擎注入的历史已见发票号命中即整拒。条目未带 invoice_no 则跳过（可选字段）。"
+  },
+  "lodging": {
+    "cap_standard": 500,
+    "cap_high_cost": 800,
+    "high_cost_cities": ["北京", "上海", "深圳", "广州", "杭州", "三亚"]
+  },
+  "meals": {
+    "daily_limit": 200,
+    "breakdown": {"早餐": 30, "午餐": 60, "晚餐": 60}
+  },
+  "transport": {
+    "airline_high_end_threshold": 800,
+    "train_second_class_default": true,
+    "taxi_daily_expense_cap": 150,
+    "personal_vehicle_rate_per_km": 1.2,
+    "rental_car_rideshares_daily_cap": 400
+  },
+  "business_services": {
+    "telecom_daily_cap": 50,
+    "software_rules": "公司统采，个人购买需单独审批"
+  },
+
+  "conflict_strategy": {
+    "precedence": ["最新版本", "更高权威度", "专项条款"],
+    "note": "多条报销规则冲突时，按 版本新→权威高→专项条款 顺序裁决；仍矛盾则需人工复核"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "multimodal_rag",
+  "version": "1.0.0",
+  "description": "<div align=\"center\">",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jiangxi1226/Evidex.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Jiangxi1226/Evidex/issues"
+  },
+  "homepage": "https://github.com/Jiangxi1226/Evidex#readme",
+  "dependencies": {
+    "canvas": "^3.2.3",
+    "jszip": "^3.10.1",
+    "pdf-parse": "^2.4.5",
+    "pdf2json": "^4.0.3",
+    "pdfjs-dist": "^3.11.174",
+    "tesseract.js": "^7.0.0"
+  }
+}

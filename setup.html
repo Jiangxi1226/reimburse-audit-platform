@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>财务报销审核平台 · 首次配置</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,sans-serif;background:#f8fafc;color:#1e293b;display:flex;justify-content:center;align-items:center;min-height:100vh;padding:20px}
+.card{background:#fff;border-radius:12px;padding:32px;max-width:560px;width:100%;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+h1{font-size:22px;margin-bottom:4px}h1 span{color:#3b82f6}
+p.sub{font-size:13px;color:#64748b;margin-bottom:24px}
+label{display:block;font-size:13px;font-weight:600;margin:14px 0 4px;color:#334155}
+input{width:100%;padding:10px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:14px;outline:none}
+input:focus{border-color:#3b82f6}
+.hint{font-size:11px;color:#94a3b8;margin-top:2px}
+.btn{width:100%;padding:12px;background:#3b82f6;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;margin-top:20px}
+.btn:hover{background:#2563eb}
+.msg{margin-top:12px;font-size:13px;text-align:center}
+.msg.ok{color:#16a34a}.msg.err{color:#ef4444}
+</style>
+</head>
+<body>
+<div class="card">
+<h1>财务报销审核平台 <span>首次配置</span></h1>
+<p class="sub">请填写 LLM API 信息，配置将保存到 .env 文件</p>
+
+<label>API Base URL</label>
+<input id="baseUrl" placeholder="https://api.openai.com/v1">
+
+<label>API Key</label>
+<input id="apiKey" type="password" placeholder="sk-...">
+
+<label>文本模型名称</label>
+<input id="textModel" placeholder="gpt-4o-mini">
+
+<label>识图模型名称 <span class="hint">（可选，不填则纯文本模式）</span></label>
+<input id="imageModel" placeholder="如 deepseek-chat / gpt-4o-mini / 你的模型名">
+
+<button class="btn" onclick="save()">保存并重启</button>
+<div class="msg" id="msg"></div>
+</div>
+<script>
+async function save(){
+  const data={
+    LLM_BASE_URL: document.getElementById('baseUrl').value.trim(),
+    LLM_API_KEY: document.getElementById('apiKey').value.trim(),
+    LLM_TEXT_MODEL: document.getElementById('textModel').value.trim(),
+    LLM_IMAGE_MODEL: document.getElementById('imageModel').value.trim(),
+  };
+  if(!data.LLM_API_KEY||!data.LLM_TEXT_MODEL){show('请至少填写 API Key 和文本模型名称','err');return}
+  try{
+    const r=await fetch('/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+    if(r.ok){show('配置已保存，正在重启...','ok');setTimeout(()=>location.href='/',2000)}
+    else{show('保存失败：'+await r.text(),'err')}
+  }catch(e){show('网络错误：'+e.message,'err')}
+}
+function show(t,c){const m=document.getElementById('msg');m.textContent=t;m.className='msg '+c}
+</script>
+</body>
+</html>

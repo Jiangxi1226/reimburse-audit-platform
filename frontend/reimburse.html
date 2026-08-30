@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>财务报销审核平台</title>
+<style>
+:root{
+  --bg:#f2f6fb; --card:#ffffff; --ink:#1e293b; --muted:#64748b; --line:#e2e8f0;
+  --brand:#2457d6; --brand2:#1d49b0; --brandbg:#eaf1ff;
+  --green:#16a34a; --greenbg:#eaf8ef;
+  --orange:#d97706; --orangebg:#fef3e2;
+  --red:#dc2626;   --redbg:#fdecec;
+  --yellow:#a16207; --yellowbg:#fdf6e3;
+  --radius:14px;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  line-height:1.55;
+}
+.wrap{max-width:1080px;margin:0 auto;padding:26px 18px 60px}
+/* 顶栏 */
+.topbar{display:flex;align-items:center;gap:14px;margin-bottom:22px}
+.logo{width:44px;height:44px;border-radius:13px;position:relative;flex-shrink:0;
+  background:conic-gradient(from 210deg,#2457d6,#3b82f6,#7dd3fc,#3b82f6,#2457d6);
+  display:flex;align-items:center;justify-content:center;
+  box-shadow:0 5px 16px rgba(37,90,214,.35),inset 0 0 0 1px rgba(255,255,255,.25)}
+.logo::after{content:"";position:absolute;inset:3px;border-radius:11px;
+  background:radial-gradient(circle at 28% 20%,rgba(255,255,255,.45),transparent 55%),linear-gradient(135deg,#2457d6,#1d49b0)}
+.logo svg{position:relative;z-index:1}
+.topbar h1{font-size:19px;margin:0;color:#14243f}
+.topbar .sub{color:var(--muted);font-size:12.5px;margin-top:2px}
+.badge-live{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--green);
+  background:var(--greenbg);padding:5px 11px;border-radius:20px;font-weight:600}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 1.6s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  padding:22px;box-shadow:0 1px 3px rgba(30,58,95,.05);margin-bottom:18px}
+.sec-title{font-size:14.5px;font-weight:700;color:#14243f;display:flex;align-items:center;gap:8px;margin:0 0 16px}
+.sec-title .n{width:22px;height:22px;border-radius:7px;background:var(--brandbg);color:var(--brand);
+  display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+.sec-title .hint{margin-left:auto;font-weight:400;font-size:12px;color:var(--muted)}
+/* 历史记录 展开/收起 大按钮 */
+.hist-toggle-btn{margin-left:auto;background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;
+  border:none;border-radius:11px;padding:11px 24px;font-size:14px;font-weight:700;cursor:pointer;
+  box-shadow:0 2px 6px rgba(20,63,159,.18);transition:.15s;display:inline-flex;align-items:center;gap:7px}
+.hist-toggle-btn:hover{filter:brightness(1.06);box-shadow:0 4px 12px rgba(20,63,159,.26)}
+.hist-toggle-btn:active{transform:translateY(1px)}
+
+/* 提交确认模态框 */
+.modal-mask{position:fixed;inset:0;background:rgba(18,28,46,.5);display:none;align-items:center;justify-content:center;z-index:999}
+.modal-mask.show{display:flex}
+.modal-box{width:min(440px,92vw);background:#fff;border-radius:16px;padding:22px 24px;box-shadow:0 20px 60px rgba(10,25,60,.35);animation:pop .16s ease}
+@keyframes pop{from{transform:scale(.94);opacity:0}to{transform:scale(1);opacity:1}}
+.modal-title{font-size:16px;font-weight:700;color:#14243f;margin-bottom:14px}
+.modal-body{max-height:46vh;overflow:auto;color:#334;font-size:14px;line-height:1.7}
+.modal-body .l{display:flex;align-items:center;gap:9px;margin:6px 0;padding:9px 12px;background:#f5f8ff;border-radius:9px}
+.modal-body .l b{color:#14243f}
+.modal-foot{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
+
+/* 上传 */
+.drop{border:2px dashed #c6d4ec;border-radius:12px;padding:26px;text-align:center;cursor:pointer;
+  transition:.15s;background:#fbfcff}
+.drop:hover,.drop.drag{border-color:var(--brand);background:var(--brandbg)}
+.drop .ic{font-size:26px}
+.drop p{margin:8px 0 2px;color:#334;font-size:14px;font-weight:600}
+.drop .sm{color:var(--muted);font-size:12px}
+.file-list{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
+.file-chip{display:flex;align-items:center;gap:8px;background:#f1f5fb;border:1px solid var(--line);
+  padding:8px 11px;border-radius:9px;font-size:12.5px;max-width:230px}
+.file-chip img.thumb{width:34px;height:34px;object-fit:cover;border-radius:6px;background:#fff;border:1px solid var(--line)}
+.file-chip .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#334}
+.file-chip .rm{color:var(--red);cursor:pointer;font-weight:700;padding:0 3px;flex-shrink:0}
+
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:720px){.grid{grid-template-columns:1fr}}
+label{display:block;font-size:12.5px;font-weight:600;color:#334;margin-bottom:6px}
+.req{color:var(--red);font-weight:700;margin-left:2px}
+input[type=text],input[type=number],input[type=date],select,textarea{
+  width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9px;font-size:14px;font-family:inherit}
+input:focus,select:focus,textarea:focus{outline:2px solid #bcd0f5;border-color:var(--brand)}
+textarea{resize:vertical;min-height:64px}
+
+/* 手填条目 */
+.item-row{display:grid;grid-template-columns:110px 130px 1fr 110px 92px 32px;gap:8px;align-items:end;margin-bottom:9px}
+.item-row .cell label{font-size:11.5px;margin-bottom:4px}
+.item-row .rm{height:36px;border:none;background:#fff;color:var(--red);border-radius:8px;font-size:18px;cursor:pointer}
+#add-item{background:var(--brandbg);color:var(--brand);border:1px dashed #bcd0f5;border-radius:9px;
+  padding:9px 15px;font-size:13px;font-weight:600;cursor:pointer;margin-top:4px}
+#add-item:hover{background:#dbe7ff}
+.item-row .cell{min-width:0}
+@media(max-width:720px){.item-row{grid-template-columns:1fr 1fr 32px}}
+
+/* 按钮 */
+.actions{display:flex;align-items:center;gap:12px;margin-top:20px}
+.btn{background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;border:none;border-radius:10px;
+  padding:13px 28px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 14px rgba(37,90,214,.25);transition:.15s}
+.btn:hover{filter:brightness(1.06)}
+.btn:disabled{opacity:.4;cursor:not-allowed;background:var(--muted);filter:none}
+.btn.ghost{background:#fff;color:var(--ink);border:1px solid var(--line);box-shadow:none}
+.msg{font-size:13px;padding:9px 13px;border-radius:9px;display:flex;align-items:center;gap:7px}
+.msg.err{background:#fdeaea;color:#c0392b;border:1px solid #f6c8c5}
+.msg.ok{background:#eafaf0;color:#1e8a4a;border:1px solid #bfe9cf}
+.msg.info{background:#eef4ff;color:#1f4faa;border:1px solid #c8dbff}
+
+/* 结果 */
+#result{display:none}
+.banner{display:flex;align-items:center;gap:18px;padding:20px;border-radius:12px;margin-bottom:16px}
+.banner .big{width:64px;height:64px;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:30px;flex-shrink:0}
+.banner h2{margin:0;font-size:20px}
+.banner p{margin:4px 0 0;font-size:13.5px;opacity:.88;max-width:640px}
+.b.approve{background:var(--greenbg);color:#114a26}
+.b.partial{background:var(--orangebg);color:#7a4306}
+.b.reject{background:var(--redbg);color:#7f1d1d}
+.b.manual_review{background:var(--yellowbg);color:#6b4e08}
+
+.kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px}
+@media(max-width:720px){.kpis{grid-template-columns:1fr}}
+.kpi{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px}
+.kpi .k{font-size:12.5px;color:var(--muted);font-weight:600}
+.kpi .v{font-size:23px;font-weight:800;margin-top:4px}
+.kpi .bar{height:6px;background:#eef2f8;border-radius:6px;margin-top:10px;overflow:hidden}
+.kpi .bar span{display:block;height:100%;border-radius:6px}
+.tag{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;padding:4px 10px;border-radius:18px}
+.tag.approve{background:var(--greenbg);color:var(--green)}
+.tag.partial{background:var(--orangebg);color:var(--orange)}
+.tag.reject{background:var(--redbg);color:var(--red)}
+.tag.manual_review{background:var(--yellowbg);color:var(--yellow)}
+
+.items{display:flex;flex-direction:column;gap:10px}
+.ione{display:flex;align-items:center;gap:14px;border:1px solid var(--line);border-radius:11px;padding:13px 15px;background:#fff}
+.ione .amt{font-weight:800;font-size:15px;white-space:nowrap}
+.ione .meta{flex:1;min-width:0}
+.ione .desc{font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ione .sub{color:var(--muted);font-size:12px;margin-top:2px}
+.ione .arrow{color:var(--muted)}
+.ione .appr{font-weight:800;font-size:15px;white-space:nowrap}
+.ione .tag{flex-shrink:0}
+
+.issues{border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.issue{display:flex;gap:10px;align-items:flex-start;padding:11px 15px;border-bottom:1px solid var(--line);background:#fff}
+.issue:last-child{border-bottom:none}
+.issue .sev{flex-shrink:0;font-size:10.5px;font-weight:800;padding:3px 8px;border-radius:6px;margin-top:2px}
+.sev.high{background:var(--redbg);color:var(--red)}
+.sev.medium{background:var(--orangebg);color:var(--orange)}
+.sev.low{background:#eef2f8;color:var(--muted)}
+.issue .code{font-family:ui-monospace,consolas,monospace;font-size:12px;color:var(--brand);font-weight:600;flex-shrink:0}
+.issue .txt{font-size:13.5px;color:#334}
+
+.meta-row{display:flex;flex-wrap:wrap;gap:18px;margin-top:16px;padding-top:16px;border-top:1px dashed var(--line);
+  color:var(--muted);font-size:12.5px}
+.meta-row b{color:#334}
+
+.spinner{display:none;width:18px;height:18px;border:2.5px solid #c6d4ec;border-top-color:var(--brand);
+  border-radius:50%;animation:spin .8s linear infinite;margin-right:8px;vertical-align:-3px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.empty{color:var(--muted);font-size:13px;text-align:center;padding:16px}
+
+/* 追问 */
+.ask-zone{margin-top:18px;border-top:1px dashed var(--line);padding-top:16px}
+.ask-zone .label{font-size:13px;font-weight:700;color:#14243f}
+.ask-zone .label i{font-style:normal;font-weight:400;color:var(--muted);font-size:12px;margin-left:6px}
+.ask-row{display:flex;gap:8px;margin-top:10px}
+.ask-row input{flex:1}
+.ask-row button{background:var(--brandbg);color:var(--brand);border:1px solid #bcd0f5;border-radius:9px;
+  padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
+.ask-row button:hover{background:#dbe7ff}
+.ask-cur{padding:10px 13px;background:#f8fbff;border:1px solid var(--line);border-radius:10px;
+  font-size:13.5px;color:#334;margin-top:9px}
+.ask-cur b{color:var(--brand)}
+.ask-hint{color:var(--muted);font-size:12px;margin-top:6px}
+
+/* 历史记录 */
+.hist-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.hist-head input{max-width:240px}
+.hist-head select{max-width:130px}
+.hist-head button{background:var(--brandbg);color:var(--brand);border:1px solid #bcd0f5;border-radius:9px;
+  padding:8px 15px;font-size:12.5px;font-weight:600;cursor:pointer}
+.hist-list{display:flex;flex-direction:column;gap:8px}
+.hrow{display:flex;align-items:center;gap:12px;border:1px solid var(--line);border-radius:10px;
+  padding:11px 14px;background:#fff;cursor:pointer;transition:.12s}
+.hrow:hover{border-color:var(--brand);box-shadow:0 2px 8px rgba(37,90,214,.08)}
+.hrow .d{width:54px;flex-shrink:0;font-weight:800;font-size:13.5px;border-radius:8px;padding:5px 0;text-align:center}
+.hrow .mid{flex:1;min-width:0}
+.hrow .t{font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hrow .s{color:var(--muted);font-size:12px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hrow .amt{font-weight:800;font-size:14px;white-space:nowrap}
+.hrow .tm{color:var(--muted);font-size:11.5px;white-space:nowrap;flex-shrink:0}
+.hrow.detail{background:#f8fbff;border:1.5px solid #bcd0f5;cursor:default}
+.hrow.detail:hover{box-shadow:none}
+.hdetail{margin-top:14px;border:1px solid var(--line);border-radius:12px;background:#fff;padding:16px;display:none}
+
+/* 智能问答入口按钮（顶栏） */
+.qa-entry{margin-left:auto;background:linear-gradient(135deg,var(--brand),var(--brand2));color:#fff;
+  border:none;border-radius:9px;padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer;
+  box-shadow:0 4px 12px rgba(37,90,214,.28);white-space:nowrap}
+.qa-entry:hover{filter:brightness(1.06)}
+.qa-entry + .badge-live{margin-left:12px}
+.topbar .badge-live{margin-left:12px}
+/* 顶栏 设置(API) 按钮 */
+.gear-btn{margin-left:12px;display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 12px;
+  border-radius:9px;border:1px solid var(--line);background:#fff;color:var(--muted);font-size:13px;
+  font-weight:500;cursor:pointer;transition:.15s;flex-shrink:0}
+.gear-btn:hover{color:var(--brand);border-color:#bcd0f5;background:var(--brandbg)}
+.gear-btn .ic{font-size:15px;line-height:1}
+.gear-btn.unset{color:#b45309;border-color:#fcd9a0;background:#fff8ec}
+.gear-btn.unset .ic{filter:none}
+
+/* 设置(API)弹窗表单 */
+.set-form{display:flex;flex-direction:column;gap:13px;margin-top:4px}
+.set-form label{font-size:12.5px;font-weight:600;color:#334;margin-bottom:5px;display:block}
+.set-form input{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:9px;font-size:13.5px;font-family:inherit}
+.set-form input:focus{outline:2px solid #bcd0f5;border-color:var(--brand)}
+.set-form input[type=password]{letter-spacing:1px}
+.set-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+.set-ok{color:var(--green);font-size:12.5px;margin-top:10px;min-height:18px}
+.set-err{color:var(--red);font-size:12.5px;margin-top:10px;min-height:18px}
+
+/* 智能问答弹窗 */
+.qa-overlay{position:fixed;inset:0;background:rgba(20,36,63,.45);
+  display:flex;align-items:flex-start;justify-content:center;z-index:60;padding:8vh 16px}
+.qa-modal{background:#fff;border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.28);
+  width:1000px;max-width:96vw;padding:22px 26px;max-height:90vh;overflow:auto;
+  border:1px solid var(--line)}
+.qa-modal-head{display:flex;align-items:center;margin-bottom:14px}
+.qa-modal-title{font-size:18px;font-weight:800;color:#14243f}
+.qa-sub{font-weight:400;font-size:13px;color:var(--muted);margin-left:8px}
+.qa-close{margin-left:auto;border:none;background:#eef2f8;color:#334;font-size:14px;
+  width:32px;height:32px;border-radius:50%;cursor:pointer;font-weight:700;flex-shrink:0}
+.qa-close:hover{background:#e2e8f0}
+.qa-row{display:flex;gap:8px;margin-bottom:8px}
+.qa-row input{flex:1}
+.qa-out{margin-top:8px}
+.qa-ans{background:#f8fbff;border:1px solid var(--line);border-radius:10px;padding:12px 14px;
+  font-size:13.5px;color:#334;line-height:1.7}
+.chip-btn{background:#f1f5fb;border:1px solid var(--line);color:var(--brand);border-radius:18px;
+  padding:6px 13px;font-size:12.5px;cursor:pointer;font-weight:600}
+.chip-btn:hover{background:var(--brandbg);border-color:#bcd0f5}
+
+/* 聊天机器人 */
+.qa-chat{height:60vh;overflow:auto;display:flex;flex-direction:column;gap:14px;
+  padding:2px 2px 12px;border-bottom:1px solid var(--line);margin-bottom:12px}
+.qa-msg{display:flex;flex-direction:column;align-items:flex-start;max-width:94%}
+.qa-msg.user{align-items:flex-end;align-self:flex-end}
+.qa-msg.bot{align-items:flex-start;align-self:flex-start}
+.qa-msg .bub{max-width:100%;padding:14px 18px;border-radius:16px;font-size:16px;line-height:1.85}
+.qa-msg.user .bub{background:var(--brand);color:#fff;border-top-right-radius:5px}
+.qa-msg.bot .bub{background:#f1f5fb;color:#334;border-top-left-radius:5px}
+.qa-msg .src{margin-bottom:6px;font-size:13px;color:var(--muted)}
+.qa-records{width:100%;margin-top:8px}
+.qa-records .hrow{background:#fff}
+.qa-records .hdetail{margin-top:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="logo"><svg viewBox="0 0 24 24" width="26" height="26" fill="none">
+      <path d="M6 4.5A1.5 1.5 0 0 1 7.5 3h9A1.5 1.5 0 0 1 18 4.5V19l-2-1.4-1 .8-1 .8-1-.9-1-.7-1 .8L11 19l-1-.8-1-.7-1 .9L7 18.4V4.5z" fill="#fff"/>
+      <path d="M9.5 7.5l2.5 3 2.5-3M12 10.5v3M9.5 13.5h5" stroke="#2457d6" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg></div>
+    <div>
+      <h1>财务报销审核平台</h1>
+    </div>
+    <button class="qa-entry" onclick="openQA()">💬 智能问答</button>
+    <span class="badge-live"><span class="dot"></span>规则引擎就绪</span>
+    <button class="gear-btn unset" id="gear-btn" onclick="openSettings()" title="设置 API 密钥">
+      <span class="ic">⚙</span><span class="txt">API配置</span></button>
+  </div>
+
+  <!-- 1. 票据上传 -->
+  <div class="card">
+    <div class="sec-title"><span class="n">1</span>发票凭证
+      <span class="hint">报销必须提供发票 <span class="req">*</span> 支持 图片 / PDF，可多张</span></div>
+    <div class="drop" id="drop">
+      <div class="ic">📎</div>
+      <p>拖拽发票到这里，或点击选择文件</p>
+      <div class="sm">png / jpg / jpeg / pdf · 首张会触发 OCR 模型加载，稍慢属正常</div>
+      <input type="file" id="file-input" hidden multiple accept=".png,.jpg,.jpeg,.pdf">
+    </div>
+    <div class="file-list" id="file-list"></div>
+  </div>
+
+  <!-- 2. 报销信息 -->
+  <div class="card">
+    <div class="sec-title"><span class="n">2</span>报销信息
+      <span class="hint">三项均为必填 <span class="req">*</span></span></div>
+    <div class="grid">
+      <div><label>报销事由<span class="req">*</span></label><input type="text" id="purpose" placeholder="如：北京出差住宿"></div>
+      <div><label>员工工号<span class="req">*</span> &nbsp;(追责到人·仅存ID不存姓名)</label><input type="text" id="employee_id" placeholder="如：E042"></div>
+      <div><label>申报总额<span class="req">*</span>（与核定交叉核对）</label><input type="number" id="claimed_total" step="0.01" min="0" placeholder="如：1200"></div>
+    </div>
+  </div>
+
+  <!-- 3. 手填条目 -->
+  <div class="card">
+    <div class="sec-title"><span class="n">3</span>费用明细
+      <span class="hint">逐条填写本次报销项目 <span class="req">*</span> 至少一条</span></div>
+    <div id="items-wrap"></div>
+    <button id="add-item" type="button">＋ 添加明细</button>
+  </div>
+
+  <div class="actions">
+    <button class="btn" id="go">提交审核 →</button>
+    <span class="spinner" id="spinner"></span>
+    <span class="msg" id="msg"></span>
+  </div>
+
+  <!-- 结果 -->
+  <div id="result" class="card" style="margin-top:18px">
+    <div class="sec-title"><span class="n">✓</span>审核结论</div>
+    <div class="banner" id="banner"></div>
+    <div class="kpis" id="kpis"></div>
+    <div class="sec-title" style="margin-top:4px">逐条核定</div>
+    <div class="items" id="items-out"></div>
+    <div class="sec-title" style="margin-top:22px">命中的规则与问题</div>
+    <div class="issues" id="issues-out"></div>
+    <div class="meta-row" id="meta"></div>
+  </div>
+
+  <!-- 智能问答：全系统查询/统计/计算（独立弹窗，可开关） -->
+  <div class="qa-overlay" id="qa" style="display:none" onclick="if(event.target===this)closeQA()">
+    <div class="qa-modal">
+      <div class="qa-modal-head">
+        <span class="qa-modal-title">💬 智能问答
+          <span class="qa-sub">对全部审核记录 查询·统计·计算（确定性）</span></span>
+        <button class="qa-close" onclick="closeQA()">✕</button>
+      </div>
+      <div class="qa-chat" id="qa-chat">
+        <div class="qa-msg bot">
+          <div class="bub">你好，我是报销智能助手 👋<br>
+            我先检索已审核的记录，再据此回答——结论来自真实数据，可核验。</div>
+        </div>
+      </div>
+      <div class="qa-row">
+        <input type="text" id="q-input" placeholder="输入你的问题…" autofocus>
+        <button class="btn qa-btn" id="qa-stop" style="display:none" onclick="qaStop()">停止</button>
+        <button class="btn qa-btn" id="qa-send" onclick="qaSend()">发送</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 历史记录 -->
+  <div class="card" id="history" style="margin-top:18px">
+    <div class="sec-title">
+      <span class="n">≡</span>历史审核记录
+      <button class="hist-toggle-btn" id="hist-toggle-btn" onclick="toggleHistBody()" title="折叠 / 展开 整个栏目">
+        <span class="ic">▴</span><span id="hist-toggle-txt">展开</span>
+      </button></div>
+    <div id="hist-body" style="display:none">
+      <div class="hist-head">
+        <input type="text" id="h-kw" placeholder="搜索 事由 / 摘要 / 条目描述…">
+        <select id="h-dec">
+          <option value="">全部决策</option>
+          <option value="approve">通过</option>
+          <option value="partial">部分核准</option>
+          <option value="reject">不予报销</option>
+          <option value="manual_review">待人工复核</option>
+        </select>
+        <button onclick="loadHistory()">检索</button>
+        <button onclick="loadHistory()" style="margin-left:auto">刷新</button>
+      </div>
+      <div class="hist-list" id="h-list"><div class="empty">暂无审核记录</div></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- 提交确认模态框（渲染 HTML，替代原生 confirm，避免标签源码外露） -->
+<div class="modal-mask" id="cfm-mask" onclick="if(event.target===this)closeCfm()">
+  <div class="modal-box">
+    <div class="modal-title">确认提交审核？</div>
+    <div class="modal-body" id="cfm-body"></div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeCfm()">取消</button>
+      <button class="btn" id="cfm-ok" onclick="doCfmSubmit()">确认提交</button>
+    </div>
+  </div>
+</div>
+
+<!-- 设置(API)模态框 -->
+<div class="modal-mask" id="set-mask" onclick="if(event.target===this)closeSettings()">
+  <div class="modal-box">
+    <div class="modal-title">API 配置</div>
+    <div class="modal-body">
+      <div class="set-form">
+        <div>
+          <label>API Key<span class="req">*</span></label>
+          <input type="password" id="set-key" placeholder="sk-..." autocomplete="off">
+        </div>
+        <div>
+          <label>API Base URL<span class="req">*</span></label>
+          <input type="text" id="set-base" placeholder="如 https://api.deepseek.com 或任意 OpenAI 兼容端点">
+        </div>
+        <div>
+          <label>模型名<span class="req">*</span></label>
+          <input type="text" id="set-model" placeholder="如 deepseek-chat / qwen-plus / 你的模型名">
+        </div>
+        <div id="set-msg" class="set-ok"></div>
+      </div>
+    </div>
+    <div class="set-actions">
+      <button class="btn ghost" onclick="closeSettings()">取消</button>
+      <button class="btn" id="set-save" onclick="saveSettings()">保存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const CATS=["其他","住宿","餐饮","交通-航空","交通-出租","交通","礼品","个人消费","娱乐消费","罚款"];
+const $=id=>document.getElementById(id);
+let files=[];
+
+/* ---------- 票据上传 ---------- */
+const drop=$("drop"), fileInput=$("file-input");
+drop.addEventListener("click",()=>fileInput.click());
+drop.addEventListener("dragover",e=>{e.preventDefault();drop.classList.add("drag");});
+drop.addEventListener("dragleave",()=>drop.classList.remove("drag"));
+drop.addEventListener("drop",e=>{e.preventDefault();drop.classList.remove("drag");addFiles(e.dataTransfer.files);});
+fileInput.addEventListener("change",e=>addFiles(e.target.files));
+function addFiles(list){
+  [...list].forEach(f=>{
+    if(!/\.(png|jpe?g|pdf)$/i.test(f.name)){msg("仅支持 png / jpg / pdf","err");return;}
+    if(f.size>20*1024*1024){msg("单文件 >20MB 已跳过: "+f.name,"err");return;}
+    files.push(f);
+  });
+  fileInput.value=""; renderFiles();
+}
+function renderFiles(){
+  $("file-list").innerHTML=files.map((f,i)=>{
+    const thumb=/\.pdf$/i.test(f.name)
+      ?'<span class="thumb" style="display:flex;align-items:center;justify-content:center;font-size:16px;background:#eef2f8">📄</span>'
+      :`<img class="thumb" src="${URL.createObjectURL(f)}">`;
+    return `<div class="file-chip">${thumb}<span class="nm">${f.name}</span>
+      <span class="rm" onclick="delFile(${i})">×</span></div>`;
+  }).join("");
+  // 明确提示：已选多少张发票，提交审核时一并上传
+  $("file-list").insertAdjacentHTML("beforeend",
+    files.length?`<div class="sm" style="width:100%;text-align:center;margin-top:6px">已上传 <b>${files.length}</b> 张发票凭证</div>`:`<div class="sm" style="width:100%;text-align:center;margin-top:6px">尚未上传发票，请先添加凭证</div>`);
+}
+function delFile(i){files.splice(i,1);renderFiles();}
+
+/* ---------- 手填条目 ---------- */
+let itemSeq=0;
+function itemRow(it={}){
+  const id="it"+(++itemSeq);
+  const opts=CATS.map(c=>`<option ${it.category===c?"selected":""}>${c}</option>`).join("");
+  return `<div class="item-row" data-id="${id}">
+    <div class="cell"><label>类别</label><select data-k="category">${opts}</select></div>
+    <div class="cell"><label>日期</label><input type="date" data-k="date" value="${it.date||'2026-08-30'}"></div>
+    <div class="cell"><label>描述</label><input type="text" data-k="desc" value="${it.desc||''}" placeholder="如：酒店标准间"></div>
+    <div class="cell"><label>金额</label><input type="number" data-k="amount" step="0.01" min="0" value="${it.amount??''}"></div>
+    <div class="cell"><label>城市</label><input type="text" data-k="city" value="${it.city||''}" placeholder="如：北京"></div>
+    <button class="rm" title="删除" onclick="this.closest('.item-row').remove()">×</button>
+  </div>`;
+}
+$("add-item").addEventListener("click",()=>$("items-wrap").insertAdjacentHTML("beforeend",itemRow()));
+$("items-wrap").insertAdjacentHTML("beforeend",itemRow({category:"餐饮",desc:"晚餐商务宴请",amount:250}));
+
+function collectItems(){
+  return [...document.querySelectorAll(".item-row")].map(r=>{
+    const o={}; r.querySelectorAll("[data-k]").forEach(n=>{if(n.value)o[n.dataset.k]=n.value;});
+    if(o.amount)o.amount=parseFloat(o.amount);
+    return o;
+  }).filter(x=>x.desc&&x.amount);
+}
+
+/* ---------- 提交 ---------- */
+let running=false;
+/* 三段一体校验：发票凭证 + 报销信息 + 费用明细 全部就绪才放行 */
+function validateForm(){
+  // ① 发票凭证
+  if(files.length===0)return {ok:false,err:"请先上传发票凭证——报销必须提供发票"};
+  // ② 报销信息（三项均必填）
+  const purpose=$("purpose").value.trim(),
+        emp=$("employee_id").value.trim(),
+        total=$("claimed_total").value.trim();
+  if(!purpose)return {ok:false,err:"请填写报销事由"};
+  if(!emp)return {ok:false,err:"请填写员工工号（用于追责到人）"};
+  if(!total||!(+total>0))return {ok:false,err:"请填写申报总额（需大于 0）"};
+  // ③ 费用明细（至少一条，且每条描述+金额不能空）
+  const items=collectItems();
+  if(items.length===0)return {ok:false,err:"请至少填写一条费用明细"};
+  return {ok:true,err:"",items};
+}
+// 提交前置确认：三段内容（HTML 渲染）确认无误后才真正送后端
+function confirmSubmit(){
+  const v=validateForm();
+  if(!v.ok){msg(v.err,"err");return;}
+  const items=v.items,
+        purpose=$("purpose").value.trim(),
+        emp=$("employee_id").value.trim(),
+        total=$("claimed_total").value.trim();
+  let body=`<div class="l">📎 发票凭证：<b>${files.length}</b> 张</div>`+
+           `<div class="l">🧾 费用明细：<b>${items.length}</b> 条</div>`+
+           `<div class="l">🏷️ 报销事由：${escapeHtml(purpose)}</div>`+
+           `<div class="l">🆔 员工工号：${escapeHtml(emp)}</div>`+
+           `<div class="l">💰 申报总额：¥${escapeHtml(total)}</div>`;
+  $("cfm-body").innerHTML=body;
+  _cfmItems=items;               // 存到当前确认批次
+  $("cfm-mask").classList.add("show");
+  $("cfm-ok").focus();
+}
+let _cfmItems=null;
+function doCfmSubmit(){ if(_cfmItems){doSubmit(_cfmItems); } closeCfm(); }
+function closeCfm(){ $("cfm-mask").classList.remove("show"); _cfmItems=null; }
+async function doSubmit(items){
+  if(running)return;
+  running=true; $("go").disabled=true; $("spinner").style.display="inline-block";
+  $("result").style.display="none"; msg("已上报，正在审核…","info");
+  const fd=new FormData();
+  files.forEach(f=>fd.append("files",f,f.name));
+  fd.append("purpose",$("purpose").value);
+  if($("employee_id") && $("employee_id").value)fd.append("employee_id",$("employee_id").value);
+  if($("claimed_total").value)fd.append("claimed_total",$("claimed_total").value);
+  if(items.length)fd.append("items_json",JSON.stringify(items));
+  try{
+    const r=await fetch("/v1/reimburse",{method:"POST",body:fd});
+    const j=await r.json();
+    if(!j.ok){msg(j.error||"审核失败","err");return;}
+    render(j.data); msg(`完成 · 服务耗时 ${j.data.server_elapsed_ms}ms`,"info");
+  }catch(e){msg("请求失败: "+e,"err");}
+  finally{running=false;$("go").disabled=false;$("spinner").style.display="none";}
+}
+$("go").addEventListener("click",confirmSubmit);
+
+/* ---------- 结果渲染 ---------- */
+const D={approve:["✓","审核通过","approve","#16a34a"],
+  partial:["±","部分核准","partial","#d97706"],
+  reject:["✕","不予报销","reject","#dc2626"],
+  manual_review:["?","待人工复核","manual_review","#a16207"]};
+function render(d){
+  const v=d.verdict, [ic,label,cls,color]=D[v.decision]||D.manual_review;
+  $("banner").className="banner b "+cls;
+  $("banner").innerHTML=`<div class="big" style="background:${color}22">${ic}</div>
+    <div><h2>${label}</h2><p>${escapeHtml(v.summary||"")}</p></div>`;
+  const t=$("claimed_total").value?parseFloat($("claimed_total").value):v.claimed_amount;
+  const total=v.claimed_amount||1;
+  $("kpis").innerHTML=`
+    <div class="kpi"><div class="k">申报核定额</div><div class="v">¥${fmt(v.claimed_amount)}</div></div>
+    <div class="kpi"><div class="k">可核准</div><div class="v" style="color:var(--green)">¥${fmt(v.approved_amount)}</div>
+      <div class="bar"><span style="width:${v.approved_amount/total*100}%;background:var(--green)"></span></div></div>
+    <div class="kpi"><div class="k">不予报销</div><div class="v" style="color:var(--red)">¥${fmt(v.rejected_amount)}</div>
+      <div class="bar"><span style="width:${v.rejected_amount/total*100}%;background:var(--red)"></span></div></div>`;
+  $("items-out").innerHTML=(v.items_adjudication||[]).map(x=>`
+    <div class="ione">
+      <span class="tag ${x.decision}">${tagTxt(x.decision)}</span>
+      <span class="amt">¥${fmt(x.amount)}</span><span class="arrow">→</span><span class="appr" style="color:${colorTxt(x.decision)}">¥${fmt(x.approved)}</span>
+      <span class="meta"><span class="desc">${escapeHtml(x.desc||"")}</span>
+        <span class="sub">${x.category||""}${x.city?" · "+x.city:""}${x.date?" · "+x.date:""}</span></span>
+    </div>`).join("");
+  $("issues-out").innerHTML=(v.issues||[]).length
+    ? v.issues.map(i=>`<div class="issue"><span class="sev ${i.severity}">${i.severity}</span>
+        <span class="code">${i.issue_code}</span><span class="txt">${escapeHtml(i.description||"")}</span></div>`).join("")
+    : `<div class="empty">未命中任何问题或规则 · 符合标准</div>`;
+  $("meta").innerHTML=`
+    <span>处理方式：<b>${d.llm_used?"调用 LLM 兜底（语义模糊）":"全规则引擎判定"}</b></span>
+    <span>条目数：<b>${(v.items_adjudication||[]).length}</b></span>
+    <span>命中规则：<b>${(v.policy_references||[]).join(", ")||"无"}</b></span>
+    <span>事由：<b>${escapeHtml(v.purpose||"—")}</b></span>`;
+  $("result").style.display="block";
+  $("result").scrollIntoView({behavior:"smooth"});
+
+  // 记录已落盘 → 刷新历史列表
+  loadHistory();
+}
+
+/* ---------- 智能问答机器人（多轮对话 · 确定性）独立弹窗 ---------- */
+function openQA(){$("qa").style.display="flex";setTimeout(()=>{const i=$("q-input");i&&i.focus();},0);}
+function closeQA(){$("qa").style.display="none";}
+let lastContext={};   // 上一轮实体，用于多轮承接
+let chatSeq=0;        // 消息序号，保证明细区 id 唯一
+function qaScroll(){$("qa-chat").scrollTop=$("qa-chat").scrollHeight;}
+function pushMsg(cls,bubble){
+  const wrap=document.createElement("div");
+  wrap.className="qa-msg "+cls;
+  wrap.innerHTML=bubble;
+  $("qa-chat").appendChild(wrap);
+  qaScroll();
+  return wrap;
+}
+// 渲染"来源记录"折叠区（默认收起，点击核验）
+function qaSrcHTML(records,seq){
+  if(!records||!records.length)return "";
+  let h=`<div class="src" style="cursor:pointer;margin-top:6px" onclick="toggleDetail('qasrc-${seq}')">📎 ${records.length} 条来源记录（点击核验）</div>`
+        +`<div id="qasrc-${seq}" style="display:none">`;
+  h+=records.map(rec=>{
+    const [ic,label,cls]=D[rec.decision]||D.manual_review;
+    return `<div class="hrow" style="cursor:pointer" onclick="toggleDetail('qad-${seq}-${rec.id}')">
+      <span class="d" style="background:${cls==='approve'?'var(--greenbg)':cls==='partial'?'var(--orangebg)':cls==='reject'?'var(--redbg)':'var(--yellowbg)'};color:${colorTxt(rec.decision)}">${label}</span>
+      <span class="mid"><span class="t">${escapeHtml(rec.purpose||"（未填事由）")}</span></span>
+      <span class="amt">¥${fmt(rec.approved_amount)}</span>
+      <span class="tm">${escapeHtml((rec.ts||"").slice(5,16))}</span>
+    </div><div id="qad-${seq}-${rec.id}" class="hdetail" style="display:none">${histDetailHTML(rec)}</div>`;
+  }).join("");
+  return h+"</div>";
+}
+// busy: 生成中禁用输入+发送、显示停止按钮
+function qaBusy(b){
+  $("q-input").disabled=b;
+  $("qa-send").disabled=b;
+  $("qa-stop").style.display=b?"inline-block":"none";
+  if(b){$("q-input").blur();} else {$("q-input").focus();}
+}
+let qaCtrl=null;               // 流式请求的 AbortController
+function qaStop(){ if(qaCtrl) qaCtrl.abort(); }
+async function qaSend(){
+  const q=$("q-input").value.trim(); if(!q){return;}
+  pushMsg("user","<div class='bub'>"+escapeHtml(q)+"</div>");
+  $("q-input").value="";
+  const waitWrap=pushMsg("bot","<div class='bub' style='color:var(--muted)'>思考中…</div>");
+  qaBusy(true);
+  qaCtrl=new AbortController();
+  let bubEl=null, srcEl=null, raw="", seq=++chatSeq, gotMeta=false, errMsg=null;
+  try{
+    const resp=await fetch("/v1/reimburse/ask_system/stream",{method:"POST",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({question:q,context:lastContext}),
+      signal:qaCtrl.signal});
+    if(!resp.ok||!resp.body) throw new Error("请求失败("+resp.status+")");
+    const reader=resp.body.getReader(), dec=new TextDecoder(); let buf="";
+    while(true){
+      const {done,value}=await reader.read(); if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      let nl;
+      while((nl=buf.indexOf("\n"))>=0){
+        const line=buf.slice(0,nl).trim(); buf=buf.slice(nl+1);
+        if(!line)continue;
+        let o; try{o=JSON.parse(line);}catch{continue;}
+        if(o.type==="meta"){
+          gotMeta=true; lastContext=o.context||lastContext;
+          waitWrap.remove();
+          // 先建来源区(若records有空)，再放答案气泡；答案气泡引用存到 bubEl
+          let inner=qaSrcHTML(o.records,seq);
+          const ansWrap=pushMsg("bot",inner+"<div class='bub'></div>");
+          bubEl=ansWrap.querySelector(".bub:last-child");
+          srcEl=ansWrap.querySelector(".src");
+          raw=o.answer_prefix||"";
+          if(raw){bubEl.innerHTML=escapeHtml(raw).replace(/\n/g,"<br>");}
+        }else if(o.type==="delta"){
+          raw+=o.text;
+          if(bubEl)bubEl.innerHTML=escapeHtml(raw).replace(/\n/g,"<br>");
+          qaScroll();
+        }else if(o.type==="done"){
+          if(!gotMeta){ waitWrap.remove(); pushMsg("bot","<div class='bub'>"+escapeHtml(o.answer||"").replace(/\n/g,"<br>")+"</div>"); }
+          else {
+            raw=o.answer||raw; if(bubEl)bubEl.innerHTML=escapeHtml(raw).replace(/\n/g,"<br>");
+            // 无关问题(records被清空)→ 移除来源折叠区，同豆包"没有就不显示"
+            if(srcEl && o.records && o.records.length===0){ srcEl.remove(); srcEl=null; }
+          }
+        }else if(o.type==="error"){ errMsg=o.message||"生成失败"; }
+      }
+    }
+  }catch(e){
+    errMsg=(e&&e.name==="AbortError")?"（已停止）":(e.message||"请求失败");
+  }finally{
+    qaCtrl=null; qaBusy(false);
+    if(errMsg!=null){
+      if(gotMeta&&bubEl){ bubEl.innerHTML+="<div style='color:var(--red);margin-top:6px'>"+escapeHtml(errMsg)+"</div>"; }
+      else { waitWrap.remove(); pushMsg("bot","<div class='bub' style='color:var(--red)'>"+escapeHtml(errMsg)+"</div>"); }
+    }
+  }
+}
+function toggleDetail(id){const el=$(id);if(el)el.style.display=(el.style.display==="block"||el.style.display==="")?"none":"block";}
+$("q-input").addEventListener("keydown",e=>{if(e.key==="Enter")qaSend();});
+
+/* ---------- 历史记录：整体折叠 + 单条可再折叠 ---------- */
+// 问题代码 → 中文短标签（未知代码回退原文）
+const CODE_TXT={LODGING_OVER_CAP:"住宿超标",NO_ITEMIZATION:"未列明细",MEAL_OVER_DAILY:"餐饮每日超额",
+  MEAL_OVERRUN_SEGMENT:"单笔餐饮超限",AIRLINE_HIGH_END:"机票超标",TAXI_OVER_CAP:"出租超限",
+  NON_REIMBURSABLE:"不可报销项",PERSONAL_ITEM:"疑似个人消费",VAGUE_ITEMIZATION:"明细笼统",
+  BLACKLISTED_SUPPLIER:"黑名单供应商",DUPLICATE_INVOICE:"发票重复",PAST_WINDOW:"超出报销期",
+  BAD_DATE:"日期异常",LLM_ARBITRATE:"语义复核",LLM_FALLBACK_FAIL:"兜底待人工"};
+// 风险等级 → 中文
+const SEV_TXT={high:"高风险",medium:"中风险",low:"低风险"};
+const codeTxt=c=>CODE_TXT[c]||c||"";
+const sevTxt=s=>SEV_TXT[s]||s||"";
+
+function histDetailHTML(rec){
+  const [ic,label,cls]=D[rec.decision]||D.manual_review;
+  return `
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <span class="tag ${rec.decision}">${label}</span>
+      <span class="amt" style="font-size:17px">核定通过 ¥${fmt(rec.approved_amount)} · 不予报销 ¥${fmt(rec.rejected_amount)}</span>
+      <span style="color:var(--muted);font-size:12px">申报 ¥${fmt(rec.claimed_amount)} · 发现 ${rec.issue_count||0} 项问题 · ${rec.llm_used?"经语义复核":"规则引擎判定"}</span>
+    </div>
+    <div style="margin-top:10px;color:#334;font-size:13.5px">${escapeHtml(rec.summary||"")}</div>
+    ${(rec.items_adjudication||[]).length?`
+      <div style="margin-top:10px">${rec.items_adjudication.map(x=>`
+        <div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:13.5px">
+          <span class="tag ${x.decision}">${tagTxt(x.decision)}</span>
+          <span>${escapeHtml(x.desc||"")}</span>
+          <span style="margin-left:auto;color:var(--muted);font-size:11.5px;font-weight:400">申报 ¥${fmt(x.amount)} → </span>
+          <span style="font-weight:700">核定 ¥${fmt(x.approved)}</span>
+        </div>`).join("")}</div>`:""}
+    ${(rec.issues||[]).length?`
+      <div style="margin-top:10px;border:1px solid var(--line);border-radius:10px;overflow:hidden">${rec.issues.map(i=>`
+        <div style="display:flex;gap:10px;align-items:flex-start;padding:8px 12px;border-bottom:1px solid var(--line);font-size:13px;background:#fff">
+          <span class="sev ${i.severity}">${sevTxt(i.severity)}</span>
+          <span class="code">${codeTxt(i.issue_code)}</span>
+          <span style="color:#334;flex:1">${escapeHtml(i.description||"")}</span></div>`).join("")}</div>`:""}`;
+}
+/* 整个栏目 折叠 / 展开（收起只影响整块可见性，不影响每条详情） */
+function toggleHistBody(){
+  const body=$("hist-body");
+  const btn=document.getElementById("hist-toggle-btn");
+  const hide=body.style.display!=="none";
+  body.style.display=hide?"none":"block";
+  // 按钮文字 + 箭头方向随状态切换（指向可执行的方向：收起→下箭头，展开→上箭头）
+  document.getElementById("hist-toggle-txt").textContent=hide?"展开":"收起";
+  btn.querySelector(".ic").textContent=hide?"▴":"▾";
+}
+/* 单条点击：只切换该条详情显隐，**始终保留汇总行**（不再整行消失） */
+function onHistClick(recId){
+  const el=$("h-det-"+recId); if(!el)return;
+  el.style.display=(el.style.display==="block")?"none":"block";
+}
+
+/* 拉取历史列表（新在前），每行可点击展开/再折叠 */
+async function loadHistory(){
+  const kw=$("h-kw").value.trim(), dec=$("h-dec").value;
+  try{
+    const r=await fetch(`/v1/reimburse/records?keyword=${encodeURIComponent(kw)}&decision=${encodeURIComponent(dec)}`);
+    const j=await r.json();
+    const list=document.getElementById("h-list");
+    if(!j.ok){list.innerHTML=`<div class="empty">${escapeHtml(j.error||"加载失败")}</div>`;return;}
+    if(!j.records.length){list.innerHTML="<div class='empty'>暂无匹配的审核记录</div>";return;}
+    list.innerHTML=j.records.map(rec=>{
+      const [ic,label,cls]=D[rec.decision]||D.manual_review;
+      return `<div class="hrow" onclick="onHistClick('${rec.id}')" style="cursor:pointer">
+        <span class="d" style="background:${cls==='approve'?'var(--greenbg)':cls==='partial'?'var(--orangebg)':cls==='reject'?'var(--redbg)':'var(--yellowbg)'};color:${colorTxt(rec.decision)}">${label}</span>
+        <span class="mid"><span class="t">${escapeHtml(rec.purpose||"（未填事由）")}</span>
+          <span class="s">${escapeHtml((rec.summary||"").slice(0,46))}</span></span>
+        <span class="amt">¥${fmt(rec.approved_amount)}<span style="color:var(--muted);font-weight:400;font-size:11px"> / ¥${fmt(rec.claimed_amount)}</span></span>
+        <span class="tm">${escapeHtml((rec.ts||"").slice(5,16))}</span>
+      </div>
+      <div id="h-det-${rec.id}" class="hdetail" style="display:none;cursor:default">
+        <div class="hdetail-in">${histDetailHTML(rec)}</div>
+      </div>`;
+    }).join("");
+  }catch(e){list.innerHTML=`<div class="empty">请求失败: ${e}</div>`;}
+}
+
+/* 页面加载即拉取历史记录 */
+loadHistory();
+
+/* ---------- 设置(API) ---------- */
+function openSettings(){
+  // 支持任意 OpenAI 兼容端点，用户自填，不预设 DeepSeek 默认值。
+  $("set-base").value=""; $("set-model").value="";
+  $("set-key").value=""; $("set-msg").textContent=""; $("set-msg").className="set-ok";
+  $("set-mask").classList.add("show");
+  setTimeout(()=>$("set-key").focus(),50);
+}
+function closeSettings(){ $("set-mask").classList.remove("show"); }
+async function saveSettings(){
+  const key=$("set-key").value.trim();
+  const base=$("set-base").value.trim();
+  const model=$("set-model").value.trim();
+  const m=$("set-msg");
+  if(!key){ m.textContent="请填写 API Key"; m.className="set-err"; return; }
+  if(!base){ m.textContent="请填写 API Base URL（支持任意 OpenAI 兼容端点）"; m.className="set-err"; return; }
+  if(!/^https:\/\//i.test(base)){ m.textContent="API Base URL 必须为 https 开头"; m.className="set-err"; return; }
+  if(!model){ m.textContent="请填写模型名"; m.className="set-err"; return; }
+  const btn=$("set-save"); btn.disabled=true; btn.textContent="保存中…";
+  m.textContent=""; m.className="set-ok";
+  try{
+    const r=await fetch("/setup",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({LLM_API_KEY:key,LLM_BASE_URL:base,LLM_TEXT_MODEL:model,LLM_IMAGE_MODEL:model})});
+    const j=await r.json();
+    if(!r.ok||!j.ok){ m.textContent=j.detail||"保存失败"; m.className="set-err"; return; }
+    m.textContent="✅ 已保存并热更新，服务无需重启。"; m.className="set-ok";
+    document.getElementById("gear-btn").classList.remove("unset");
+    setTimeout(closeSettings,1200);
+  }catch(e){ m.textContent="请求失败: "+e; m.className="set-err"; }
+  finally{ btn.disabled=false; btn.textContent="保存"; }
+}
+const tagTxt=d=>({approve:"批准",partial:"部分",reject:"拒报",manual_review:"人工"})[d]||d;
+const colorTxt=d=>({approve:"#16a34a",partial:"#d97706",reject:"#dc2626",manual_review:"#a16207"})[d]||"#334";
+const fmt=n=>(+n||0).toLocaleString("zh-CN",{minimumFractionDigits:2});
+const escapeHtml=s=>String(s??"").replace(/[&<>"']/g,t=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[t]));
+let msgTimer;
+/* 提示条：type=err/ok/info，带图标 + 底色，更清晰的区块提示 */
+const MSG_ICON={err:"⚠️",ok:"✅",info:"ℹ️"};
+function msg(t,type="info"){
+  const m=$("msg");
+  m.textContent=MSG_ICON[type]+" "+t;
+  m.className="msg "+type;
+  clearTimeout(msgTimer);if(type!=="err")msgTimer=setTimeout(()=>{m.className="msg";m.textContent="";},6000);
+}
+</script>
+</body>
+</html>

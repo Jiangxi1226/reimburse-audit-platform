@@ -1,0 +1,37 @@
+[project]
+name = "evidex-finrag"
+version = "1.1.0"
+description = "证析 (Evidex) — 基于RAG的智能财报数据分析平台（多来源冲突检测 + 图文双路径检索）"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.0.0",
+    "chromadb>=0.4.0",
+    "sentence-transformers>=3.0.0",
+    "gradio>=4.0.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.30.0",
+    "pydantic>=2.0.0",
+    "python-multipart>=0.0.9",
+    "pdfplumber>=0.9.0",
+    "python-docx>=1.0.0",
+    "openpyxl>=3.0.0",
+    "python-pptx>=0.6.0",
+    "PyMuPDF>=1.23.0",
+    "paddleocr>=2.7.0",
+    "numpy>=1.24.0",
+    "Pillow>=10.0.0",
+    "pytest>=8.0.0",
+]
+
+[project.optional-dependencies]
+langchain = [
+    "langchain>=1.0.0",
+    "langchain-community>=0.4.0",
+    "langchain-openai>=1.0.0",
+    "langchain-classic>=1.0.0",
+    "faiss-cpu>=1.7.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
