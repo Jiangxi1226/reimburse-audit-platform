@@ -1,26 +1,36 @@
+# —— Python 缓存 ——
 __pycache__/
 .pytest_cache/
+*.pyc
+*.pyo
+
+# —— 密钥：只在本地 .env，绝不入库 ——
+.env
+
+# —— 运行时数据：向量库/文档库/上传票据/审计记录/日志，都不入库 ——
 chroma_data/
 data/
 logs/
 traces/
-*.db
-*.db-shm
-*.db-wal
-*.pyc
-*.pyo
-.env
-*.log
-*.pid
-.serve.pid
-node_modules/
-venv/
-.venv/
 reimbursement/uploads/
 reimbursement/vector_db/
 reimbursement/audit_records.json
 eval/eval_results.json
 eval/run_output.log
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.pid
+.serve.pid
+
+# —— 前端 / 虚拟环境 / 系统文件 ——
+node_modules/
+venv/
+.venv/
 .history/
 .DS_Store
 Thumbs.db
+
+# 注意：reimbursement/reimbursement_rules.json 是【报销规则库】，必须入库，不要忽略。
+# data/knowledge_base.db 由 core/db.init_db() 启动时自动建表（幂等），故其文件本身无需入库。

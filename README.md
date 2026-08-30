@@ -145,6 +145,16 @@ cp .env.example .env            # 或直接在界面右上角「⚙ API配置」
 
 > `base_url` 必填且须为 `https`；`api_key` / 模型名必填。三者均可随时更改，**热更新，无需重启**。
 
+### 运行测试
+
+```bash
+# 回归测试（48 项：核心模块 / Agent 推理 / 权限闸门 / 冲突消解 / 集成链路）
+pytest tests/ -v
+
+# 离线基准（规则引擎审计能力：allow/deny 闸门真实生效）
+python reimbursement/benchmark.py
+```
+
 ### 启动
 
 ```bash
