@@ -158,6 +158,9 @@ def to_audit_items(parsed: dict) -> list[dict]:
             "desc": it.get("name", "") or ext.get("vendor", ""),
             "city": it.get("city") or ext.get("city", ""),
             "itemization": [it.get("name", "")],
+            # 防骗保(可选字段)：发票号→唯一性校验，开票方→供应商黑名单。未抽到为空串则不触发。
+            "invoice_no": ext.get("invoice_number", ""),
+            "supplier": ext.get("vendor", ""),
         })
     if not items and ext.get("amount") is not None:
         items.append({
@@ -166,6 +169,8 @@ def to_audit_items(parsed: dict) -> list[dict]:
             "amount": ext.get("amount"),
             "desc": ext.get("vendor", "") or ext.get("invoice_type", ""),
             "city": ext.get("city", ""),
+            "invoice_no": ext.get("invoice_number", ""),
+            "supplier": ext.get("vendor", ""),
         })
     return items
 
