@@ -1,4 +1,5 @@
 import sys, os, time, traceback, json
+import asyncio, queue, threading
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
@@ -93,6 +94,26 @@ _upload_tasks: dict[str, dict] = {}
 from concurrent.futures import ThreadPoolExecutor
 _upload_executor = ThreadPoolExecutor(max_workers=2)
 
+# 上传任务表保留上限：任务记录只写不删会随运行时间无限增长（含解析消息，占内存）。
+# 只保留最近 N 条，超出时优先裁掉已结束(success/failed)的最早记录。
+_MAX_UPLOAD_TASKS = 200
+
+
+def _remember_upload_task(task_id: str, info: dict) -> None:
+    """登记上传任务并裁剪历史，防止 _upload_tasks 无限增长。"""
+    _upload_tasks[task_id] = info
+    if len(_upload_tasks) <= _MAX_UPLOAD_TASKS:
+        return
+    # 优先清理已结束（成功/失败）的旧记录；dict 保持插入序，从最早的开始
+    for tid in list(_upload_tasks.keys()):
+        if len(_upload_tasks) <= _MAX_UPLOAD_TASKS:
+            break
+        if _upload_tasks[tid].get("status") in ("success", "failed"):
+            _upload_tasks.pop(tid, None)
+    # 仍超限（都是 running）则按最早登记顺序裁剪，保证有硬上限
+    while len(_upload_tasks) > _MAX_UPLOAD_TASKS:
+        _upload_tasks.pop(next(iter(_upload_tasks)), None)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -107,7 +128,7 @@ async def lifespan(app: FastAPI):
         registry.register(ReimbursementTool())
         # Runtime 权限闸门：API 默认 deny（对话内高险写操作被拦截，体现"模型只出意图"），
         # 信任基线 analyst——可检索、可计算，不能写入知识库；上传走独立 /v1/upload 端点。
-        registry.set_guard(build_guard(rag_tool=rag_tool, on_confirm="deny"))
+        registry.set_guard(build_guard(rag_tool=rag_tool, on_confirm="deny", persist=True))
         registry.set_ctx_default(make_ctx(role="analyst", user_id="api_default"))
         agent = ReactAgent(name="财务报销审核助手", llm=llm, tool_registry=registry)
         session_mgr = SessionManager(llm)
@@ -390,20 +411,21 @@ async def upload(file: UploadFile = File(...)):
     # 马上返回 task_id，客户端轮询 /v1/upload/status/{task_id}。
     import uuid as _uuid
     task_id = f"up_{_uuid.uuid4().hex[:12]}"
-    _upload_tasks[task_id] = {"status": "running", "message": "解析中", "added_chunks": 0}
+    _remember_upload_task(task_id, {"status": "running", "message": "解析中", "added_chunks": 0})
 
     def _worker(tid: str, path: str):
         import json as _json
         try:
             result = rag_tool.execute("add_file", file_path=path)
             parsed = _json.loads(result)
-            _upload_tasks[tid].update(
+            # setdefault：任务记录可能因上限裁剪已被移除，补建而非 KeyError
+            _upload_tasks.setdefault(tid, {}).update(
                 status="success" if parsed.get("ok") else "failed",
                 message=result if parsed.get("ok") else parsed.get("error", "文件处理失败"),
                 added_chunks=parsed.get("data", {}).get("added_chunks", 0) if parsed.get("ok") else 0,
             )
         except Exception as e:
-            _upload_tasks[tid].update(status="failed", message=f"{type(e).__name__}: {str(e)[:300]}")
+            _upload_tasks.setdefault(tid, {}).update(status="failed", message=f"{type(e).__name__}: {str(e)[:300]}")
         finally:
             try:
                 os.unlink(path)
@@ -724,8 +746,46 @@ async def reimburse_ask_system(req: ReimburseSysAskRequest):
         return ReimburseSysAskResponse(ok=False, error=str(e))
 
 
+async def _aiter_sync(sync_iter, should_stop=None):
+    """把同步生成器放到后台线程拉取、经队列喂给事件循环——避免阻塞 async 端点。
+
+    LLM 的 chat_stream 是同步阻塞生成器；在 async 端点里直接 `for` 迭代会占住
+    事件循环，期间其他并发请求全被拖住。这里用「后台线程 + 无界队列」解耦：
+    线程负责阻塞式拉取，事件循环只 await 队列取数，互不阻塞。
+    should_stop：可选回调，返回 True 时线程停止继续拉取（客户端断开时止损）。
+    """
+    q: "queue.Queue" = queue.Queue()
+    _SENTINEL = object()
+
+    def _pump():
+        try:
+            for item in sync_iter:
+                if should_stop is not None and should_stop():
+                    break
+                q.put(item)
+        except BaseException as exc:      # 异常也交给消费方按原语义抛出
+            q.put(exc)
+        finally:
+            q.put(_SENTINEL)
+
+    threading.Thread(target=_pump, daemon=True).start()
+
+    get_task = asyncio.ensure_future(asyncio.to_thread(q.get))
+    try:
+        while True:
+            item = await get_task
+            if item is _SENTINEL:
+                return
+            if isinstance(item, BaseException):
+                raise item
+            get_task = asyncio.ensure_future(asyncio.to_thread(q.get))  # 预取下一项
+            yield item
+    finally:
+        get_task.cancel()
+
+
 @app.post("/v1/reimburse/ask_system/stream")
-async def reimburse_ask_system_stream(req: ReimburseSysAskRequest):
+async def reimburse_ask_system_stream(req: ReimburseSysAskRequest, request: Request):
     """**流式 RAG 问答**：检索(确定性/语义)同 ask_system，但 LLM 生成逐块吐出(打字机)。
 
     响应为 NDJSON，每行一个对象：
@@ -734,22 +794,38 @@ async def reimburse_ask_system_stream(req: ReimburseSysAskRequest):
       {"type":"done","answer":str}  结束
       {"type":"error","message":str} 失败
     前端用 fetch+ReadableStream 逐行解析，可 AbortController 中途停止。
+
+    客户端中途断开：每个增量前检查 request.is_disconnected()，断开即停止继续生成 LLM，
+    避免用户已经离开、后端还在把整段答案烧完。
     """
 
     def _j(o: dict) -> str:
         return json.dumps(o, ensure_ascii=False, default=str) + "\n"
 
-    async def gen():
+    async def _client_gone() -> bool:
         try:
-            ans = reimburse_records.answer_system(req.question, context=req.context or None)
+            return await request.is_disconnected()
+        except Exception:
+            return False
+
+    async def gen():
+        if await _client_gone():
+            return
+        try:
+            # 确定性检索也可能耗时（SQL/聚合），放线程执行，别占住事件循环
+            ans = await asyncio.to_thread(
+                reimburse_records.answer_system, req.question,
+                context=req.context or None)
         except Exception as e:
             yield _j({"type": "error", "message": f"检索失败：{e}"})
             return
         sem_records = []
         try:
             from reimbursement import rag_store as reimburse_rag
-            sem_records = ([x["record"] for x in reimburse_rag.semantic_search(req.question, top_k=8)
-                            if x.get("similarity", 0) >= _SIM_THRESHOLD])[:3]
+            # 语义检索含 embedding 计算，是重 CPU/IO 操作，同样放线程
+            sem_records = await asyncio.to_thread(
+                lambda: ([x["record"] for x in reimburse_rag.semantic_search(req.question, top_k=8)
+                          if x.get("similarity", 0) >= _SIM_THRESHOLD])[:3])
         except Exception:
             sem_records = []
 
@@ -790,9 +866,16 @@ async def reimburse_ask_system_stream(req: ReimburseSysAskRequest):
             try:
                 from core.llm import LLM
                 parts = []
-                for ch in LLM().chat_stream(
-                        [{"role": "system", "content": sys_prompt},
-                         {"role": "user", "content": user_prompt}], temperature=0.3):
+                gone = False
+                # 同步 chat_stream 经 _aiter_sync 放后台线程拉取，不阻塞事件循环；
+                # 每个增量前检查客户端是否断开，断开即止损、不再继续消耗 LLM。
+                stream = LLM().chat_stream(
+                    [{"role": "system", "content": sys_prompt},
+                     {"role": "user", "content": user_prompt}], temperature=0.3)
+                async for ch in _aiter_sync(stream, should_stop=lambda: gone):
+                    if await _client_gone():
+                        gone = True
+                        return
                     parts.append(ch)
                     yield _j({"type": "delta", "text": ch})
                 ans["answer"] = "".join(parts)

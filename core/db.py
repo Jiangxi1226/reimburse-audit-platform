@@ -1,4 +1,4 @@
-import sqlite3, os, uuid, json, threading
+import sqlite3, os, uuid, json, threading, time
 from contextlib import contextmanager
 
 
@@ -104,6 +104,19 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
         CREATE INDEX IF NOT EXISTS idx_errors_code ON error_logs(error_code);
         CREATE INDEX IF NOT EXISTS idx_errors_created ON error_logs(created_at);
+
+        -- RuntimeGuard 状态持久化：让「幂等」「预算」跨进程重启依然有效。
+        -- 此前这两项只在进程内存里，重启即清零 —— 重复退款防不住、预算被重置。
+        CREATE TABLE IF NOT EXISTS guard_idem (
+            idem_key TEXT PRIMARY KEY,     -- user+tool+action+args 的哈希
+            result TEXT,                   -- 上次执行结果（幂等重放用）
+            created_at REAL                -- 写入时间戳（裁剪用）
+        );
+        CREATE TABLE IF NOT EXISTS guard_budget (
+            budget_key TEXT NOT NULL,      -- user:tool.action
+            ts REAL NOT NULL               -- 每次调用时间戳（滑动窗口用）
+        );
+        CREATE INDEX IF NOT EXISTS idx_guard_budget_key ON guard_budget(budget_key);
     """)
 
 
@@ -233,6 +246,52 @@ def get_recent_audit(limit: int = 50, tool: str = None, verdict: str = None) -> 
         params.append(verdict)
     rows = conn.execute(query + " ORDER BY created_at DESC LIMIT ?", params + [limit]).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# RuntimeGuard 状态持久化 —— 幂等 / 预算跨重启保留
+# ---------------------------------------------------------------------------
+
+def guard_idem_load(limit: int = 5000) -> dict:
+    """加载最近的幂等记录（key -> 上次结果），用于重启后仍能识别"这个写操作做过了"。"""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT idem_key, result FROM guard_idem ORDER BY created_at DESC LIMIT ?",
+        (limit,)).fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def guard_idem_put(idem_key: str, result: str, max_rows: int = 5000) -> None:
+    """写入一条幂等记录，并裁掉超出上限的最早记录（防表无限增长）。"""
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO guard_idem (idem_key, result, created_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(idem_key) DO UPDATE SET result=excluded.result, created_at=excluded.created_at",
+        (idem_key, result, time.time()))
+    conn.execute(
+        "DELETE FROM guard_idem WHERE idem_key NOT IN ("
+        "  SELECT idem_key FROM guard_idem ORDER BY created_at DESC LIMIT ?)",
+        (max_rows,))
+    conn.commit()
+
+
+def guard_budget_load(cutoff_ts: float) -> dict:
+    """加载 cutoff 之后的调用时间戳（key -> [ts,...]），滑动窗口据此判断是否超预算。"""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT budget_key, ts FROM guard_budget WHERE ts > ?", (cutoff_ts,)).fetchall()
+    out: dict = {}
+    for k, ts in rows:
+        out.setdefault(k, []).append(ts)
+    return out
+
+
+def guard_budget_add(budget_key: str, ts: float, cutoff_ts: float) -> None:
+    """记录一次调用，并清理窗口外的旧时间戳（表只保留需要的时间范围）。"""
+    conn = _get_conn()
+    conn.execute("INSERT INTO guard_budget (budget_key, ts) VALUES (?, ?)", (budget_key, ts))
+    conn.execute("DELETE FROM guard_budget WHERE ts <= ?", (cutoff_ts,))
+    conn.commit()
 
 
 def get_recent_errors(limit: int = 20, severity: str = None) -> list[dict]:

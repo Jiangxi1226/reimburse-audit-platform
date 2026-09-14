@@ -24,7 +24,7 @@ registry.register(CalculatorTool())
 registry.register(ImageAnalysisTool(llm))
 # Runtime 权限闸门：本地 Gradio 演示按 admin 全量信任（读/写/确认均放行）。
 # 工具执行权统一交给 registry 的 Guard，模型产物仅视为意图。
-registry.set_guard(build_guard(rag_tool=rag_tool, on_confirm="approve"))
+registry.set_guard(build_guard(rag_tool=rag_tool, on_confirm="approve", persist=True))
 registry.set_ctx_default(make_ctx(role="admin", user_id="local_demo"))
 
 agent = ReactAgent(name="财务报销审核助手", llm=llm, tool_registry=registry)

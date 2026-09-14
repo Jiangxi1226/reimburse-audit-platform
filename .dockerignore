@@ -1,0 +1,45 @@
+# Docker 构建上下文排除清单
+# 目的：让 `COPY . .` 只带代码，不带开发垃圾与运行时数据
+#（否则镜像会被 node_modules / 向量库 / 日志撑大，且可能把 .env 密钥打进镜像）
+
+# —— 版本控制 / 前端依赖 / 虚拟环境 ——
+.git
+.gitignore
+node_modules
+venv
+.venv
+.history
+
+# —— Python 缓存 ——
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+
+# —— 密钥：绝不进镜像 ——
+.env
+
+# —— 运行时数据：向量库 / 业务库 / 上传票据 / 日志 / trace ——
+chroma_data
+data
+logs
+traces
+reimbursement/uploads
+reimbursement/vector_db
+reimbursement/audit_records.json
+eval/eval_results.json
+eval/run_output.log
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.pid
+
+# —— 文档 / 编辑器 ——
+Dockerfile
+docker-compose.yml
+.dockerignore
+*.md
+LICENSE
+.DS_Store
+Thumbs.db

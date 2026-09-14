@@ -1,0 +1,69 @@
+# 多模态 RAG 知识库助手 — Docker Compose 编排
+#
+# 用途：一条命令把「怎么跑」固化下来，免去手写一长串 docker run 参数
+#（端口映射、volume 挂载、环境变量此前都要在命令行里手敲，易错且难共享）。
+#
+# 用法：
+#   docker compose up -d              # 启动 API 服务（默认，端口 8000）
+#   docker compose --profile ui up -d # 额外启动 Gradio Web UI（端口 7860）
+#   docker compose logs -f            # 看日志
+#   docker compose down               # 停止并移除容器（volume 数据保留）
+#
+# 前置：项目根已存在 .env（含 LLM_API_KEY / LLM_BASE_URL / LLM_TEXT_MODEL）。
+#       cp .env.example .env 后填入真实值。
+
+services:
+  # ── API 服务（FastAPI，生产主入口）──
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: multimodal-rag:latest
+    container_name: multimodal-rag
+    command: ["python", "api.py"]
+    env_file:
+      - .env
+    environment:
+      # 容器内固定监听 0.0.0.0，端口对宿主机暴露由 ports 决定
+      HOST: "0.0.0.0"
+      PORT: "8000"
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "8000:8000"
+    volumes:
+      # 运行时数据挂载出来：容器删了数据仍在宿主机，且可跨容器复用
+      - ./chroma_data:/app/chroma_data     # 向量库（sqlite + faiss 落盘目录）
+      - ./data:/app/data                    # 业务 SQLite（knowledge_base.db）
+      - ./logs:/app/logs                    # 运行日志
+      - ./traces:/app/traces                # trace 链路追踪 JSON
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s   # 模型加载慢，给启动宽限期，避免刚起就被判不健康
+      retries: 3
+
+  # ── Gradio Web UI（可选，生产一般不用，调试/演示时开）──
+  webui:
+    profiles: ["ui"]      # 默认不启动，需 --profile ui 显式开启
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: multimodal-rag:latest
+    container_name: multimodal-rag-ui
+    command: ["python", "app.py"]
+    env_file:
+      - .env
+    environment:
+      HOST: "0.0.0.0"
+      GRADIO_PORT: "7860"
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./chroma_data:/app/chroma_data
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./traces:/app/traces
+    restart: unless-stopped

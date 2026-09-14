@@ -141,12 +141,28 @@ class Redactor:
 
     @staticmethod
     def mask_fields(obj, fields: list[str]):
-        """对 dict 中的敏感字段值打码（如 result 里的 filename 不脱敏，但金额字段脱敏）。"""
+        """对 dict 中指定字段值打码（金额/证件号/手机号/银行卡全套正则）。"""
         if not isinstance(obj, dict):
             return obj
         for f in fields:
             if f in obj and isinstance(obj[f], str):
-                obj[f] = _RE_AMOUNT.sub("¥**", obj[f])
+                obj[f] = Redactor.mask_text(obj[f])[0]
+        return obj
+
+    @staticmethod
+    def mask_obj(obj):
+        """递归最小化脱敏任意 dict/list——审计入库前用。
+
+        不再依赖"字段名恰好叫 text/query"：凡是字符串值，命中金额/证件号/手机号/
+        银行卡正则就脱敏，避免敏感字段换了名字（phone、id_card…）就漏脱。
+        返回新对象，不原地修改入参。
+        """
+        if isinstance(obj, dict):
+            return {k: Redactor.mask_obj(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [Redactor.mask_obj(v) for v in obj]
+        if isinstance(obj, str):
+            return Redactor.mask_text(obj)[0]
         return obj
 
 
@@ -165,8 +181,16 @@ class RuntimeGuard:
     都视为不可信的意图，能否执行、以何种风险执行，均由本 Guard 决定。
     """
 
+    # 内部状态上限：这些都是进程内字典，若只写不删会随运行时间无限增长（内存泄漏）。
+    # 保底做法是给每个 dict 设硬上限 + 对确认令牌设有效期，超出按最早登记顺序裁剪。
+    _MAX_IDEM = 5000          # 幂等缓存条数上限
+    _MAX_CONFIRM = 1000       # 待确认队列上限
+    _CONFIRM_TTL = 15 * 60    # 待确认令牌有效期（秒）——过期令牌不可再用
+    _MAX_ROLLBACK = 1000      # 回滚登记条数上限
+    _MAX_BUDGET_KEYS = 10000  # 预算记录键数上限
+
     def __init__(self, policies: list[ToolPolicy] | None = None,
-                 on_confirm: str = "deny"):
+                 on_confirm: str = "deny", persist: bool = False):
         self._policies: dict[str, ToolPolicy] = {}
         for p in (policies or []):
             self._policies[p.key] = p
@@ -177,6 +201,37 @@ class RuntimeGuard:
         self._rollback: dict[str, callable] = {}       # 登记的回滚回调
         self.on_confirm = on_confirm                   # confirm 命中后 auto 行为: deny/approve
         self.audit_log = None                          # 由 registry 注入 db.log_audit
+        # 持久化：幂等/预算落 SQLite，跨进程重启依然有效（默认关闭，测试/无 DB 场景不受影响）。
+        self._db = self._load_db() if persist else None
+        self._restore_state()
+
+    # ---- 持久化：加载 / 恢复 ----
+    @staticmethod
+    def _load_db():
+        """惰性获取 core.db；不可用时返回 None（持久化静默降级为纯内存）。"""
+        try:
+            from core import db as _db
+            return _db
+        except Exception:
+            return None
+
+    def _restore_state(self) -> None:
+        """进程启动时把上次的幂等记录与预算窗口读回内存。失败不阻断启动。"""
+        if self._db is None:
+            return
+        try:
+            self._idem.update(self._db.guard_idem_load(self._MAX_IDEM))
+        except Exception:
+            pass
+        try:
+            now = time.time()
+            restored = self._db.guard_budget_load(now - 24 * 3600)
+            for k, ts in restored.items():
+                recent = [t for t in ts if now - t < 24 * 3600]
+                if recent:
+                    self._budget_spent[k] = recent
+        except Exception:
+            pass
 
     # ---- 策略增删 ----
     def register(self, policy: ToolPolicy):
@@ -252,16 +307,27 @@ class RuntimeGuard:
             return None
         key = f"{ctx.user_id}:{p.key}"
         now = time.time()
-        self._budget_spent.setdefault(key, []).append(now)
-        recent = [t for t in self._budget_spent[key] if now - t < 24 * 3600]
+        recent = [t for t in self._budget_spent.get(key, []) if now - t < 24 * 3600]
+        recent.append(now)
         self._budget_spent[key] = recent
+        # 落库：重启后预算仍能延续（失败静默降级为内存态，不阻断业务）
+        if self._db is not None:
+            try:
+                self._db.guard_budget_add(key, now, now - 24 * 3600)
+            except Exception:
+                pass
+        # 键数按 (用户×工具) 增长，超限时清理"全部时间戳都已过期"的空键，防内存膨胀
+        if len(self._budget_spent) > self._MAX_BUDGET_KEYS:
+            for k in [k for k, ts in self._budget_spent.items()
+                      if not [t for t in ts if now - t < 24 * 3600]]:
+                self._budget_spent.pop(k, None)
         if len(recent) > p.budget:
             return GuardDecision(Verdict.DENY, p.risk,
                                  reason=f"超出调用预算（{p.key} 每用户每天上限 {p.budget} 次）")
 
     # ---- 主判定：七道闸门依次放行 ----
     def gate(self, tool: str, action: str, args: dict,
-             ctx: AccessContext) -> GuardDecision:
+             ctx: AccessContext, skip_budget: bool = False) -> GuardDecision:
         # ① 白名单
         p = self._is_whitelisted(tool, action)
         if p is None:
@@ -281,9 +347,12 @@ class RuntimeGuard:
         if d:
             return d
         # ⑦ 预算（先于可执行判定，防刷）
-        d = self._check_budget(p, ctx, tool, action)
-        if d:
-            return d
+        # skip_budget：幂等重放不消耗预算——它没有真正执行后端，只是回放上次结果。
+        # 其余闸门（白名单/身份/角色/参数）仍照常校验，权限不会被绕过。
+        if not skip_budget:
+            d = self._check_budget(p, ctx, tool, action)
+            if d:
+                return d
         # ⑤⑥ 风险分级 + 审批 → 决定 ALLOW 还是 CONFIRM
         if self._needs_confirm(p):
             token = self._issue_confirm(p, tool, action, args, ctx)
@@ -292,7 +361,17 @@ class RuntimeGuard:
                                  policy_name=p.key, confirm_token=token)
         return GuardDecision(Verdict.ALLOW, p.risk, reason=f"通过闸门 {p.key}", policy_name=p.key)
 
+    def _sweep_confirms(self) -> None:
+        """清理过期的待确认令牌——令牌有有效期，且防止队列无限增长。"""
+        now = time.time()
+        for k in [k for k, v in self._confirm_waiting.items()
+                  if now - v.get("ts", 0) > self._CONFIRM_TTL]:
+            self._confirm_waiting.pop(k, None)
+        while len(self._confirm_waiting) > self._MAX_CONFIRM:
+            self._confirm_waiting.pop(next(iter(self._confirm_waiting)), None)
+
     def _issue_confirm(self, p: ToolPolicy, tool, action, args, ctx) -> str:
+        self._sweep_confirms()
         token = hashlib.sha256(f"{ctx.user_id}:{p.key}:{time.time_ns()}".encode()).hexdigest()[:16]
         self._confirm_waiting[token] = {"tool": tool, "action": action,
                                         "args": args, "ctx": ctx, "ts": time.time()}
@@ -300,6 +379,7 @@ class RuntimeGuard:
 
     # ---- 人工审批（图⑥ 二次确认）：approve/pending 后重放 ----
     def confirm_pending(self) -> list[dict]:
+        self._sweep_confirms()   # 先清过期，列表里不再出现已失效的令牌
         return [{"token": k, "tool": v["tool"], "action": v["action"],
                  "args": v["args"], "user": v["ctx"].user_id, "ts": v["ts"]}
                 for k, v in self._confirm_waiting.items()]
@@ -327,7 +407,12 @@ class RuntimeGuard:
         返回 (decision, result)。DENY / CONFIRM 不触发 dispatcher。
         CONFIRM 每次：on_confirm='deny' 默认拒绝（安全），'approve' 直接放行（演示/测试）。
         """
-        d = self.gate(tool, action, args, ctx)
+        # 先算幂等键、判断是否"重放"：重放时跳过预算（见 gate 的 skip_budget 说明）。
+        policy = self.policy(tool, action)
+        idem_key = self._idem_key(ctx, tool, action, args) if (policy and policy.mutable) else None
+        replay = bool(idem_key and idem_key in self._idem)
+
+        d = self.gate(tool, action, args, ctx, skip_budget=replay)
 
         if d.verdict == Verdict.DENY:
             self._audit(ctx, tool, action, args, d, ok=False, result=d.reason)
@@ -345,10 +430,8 @@ class RuntimeGuard:
                               policy_name=d.policy_name)
 
         # ---- ALLOW：真正交给后端执行 ----
-        # 幂等：mutable 写操作，相同参数只执行一次
-        policy = self.policy(tool, action)
-        idem_key = self._idem_key(ctx, tool, action, args) if (policy and policy.mutable) else None
-        if idem_key and idem_key in self._idem:
+        # 幂等：mutable 写操作，相同参数只执行一次（policy/idem_key 已在入口处算好）
+        if replay:
             result = self._idem[idem_key]
             self._audit(ctx, tool, action, args, d, ok=True, result="[幂等重放]",
                         masked=False)
@@ -363,11 +446,21 @@ class RuntimeGuard:
         ok = not (raw.startswith("❌") or "失败" in raw[:80])
         if ok and idem_key:
             self._idem[idem_key] = raw
+            if len(self._idem) > self._MAX_IDEM:   # 硬上限：按最早登记裁剪，防无限增长
+                self._idem.pop(next(iter(self._idem)), None)
+            # 落库：重启后相同写操作仍能识别为"已执行过"，不会重复退款/重复写入
+            if self._db is not None:
+                try:
+                    self._db.guard_idem_put(idem_key, raw, self._MAX_IDEM)
+                except Exception:
+                    pass
 
         # 回滚策略登记：写操作成功 → 记录撤销钩子
         if ok and policy and policy.mutable and policy.rollback:
             undo_key = f"{ctx.user_id}:{idem_key}"
             self._rollback[undo_key] = (policy.rollback, dict(args))
+            if len(self._rollback) > self._MAX_ROLLBACK:
+                self._rollback.pop(next(iter(self._rollback)), None)
 
         # 后端再次校验的兜底：对返回结果做最小化脱敏（图「数据脱敏」）
         masked = False
@@ -396,7 +489,9 @@ class RuntimeGuard:
         if self.audit_log is None:
             return
         try:
-            safe_args = Redactor.mask_fields(dict(args), ["text", "query"])
+            # 审计入库前做全覆盖脱敏：递归扫描 args 全部字符串值，
+            # 命中手机/证件号/银行卡/金额即打码（不再只认 text/query 两个字段名）。
+            safe_args = Redactor.mask_obj(dict(args))
             self.audit_log(
                 user_id=ctx.user_id, tenant_id=ctx.tenant_id, role=ctx.role,
                 tool=tool, action=action, args=safe_args,

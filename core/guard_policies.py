@@ -50,12 +50,15 @@ def _rollback_source(pipeline):
     return fn
 
 
-def build_guard(rag_tool=None, on_confirm: str = "deny") -> RuntimeGuard:
+def build_guard(rag_tool=None, on_confirm: str = "deny",
+                persist: bool = False) -> RuntimeGuard:
     """按项目现状构建默认权限闸门。
 
     rag_tool：用于给 rag 写操作挂回滚钩子；不传则写操作无回滚（降级）。
     on_confirm：高险操作被审批拦截时的策略。默认 'deny'（安全），
                 'approve' 用于演示/测试放行路径。
+    persist：是否把「幂等/预算」落到 SQLite（重启后仍生效）。生产入口应开启；
+             默认 False（测试/无 DB 场景保持纯内存行为不变）。
     """
     policies: list[ToolPolicy] = []
 
@@ -133,7 +136,7 @@ def build_guard(rag_tool=None, on_confirm: str = "deny") -> RuntimeGuard:
         arg_types={"category": str, "city": str},
     ))
 
-    guard = RuntimeGuard(policies=policies, on_confirm=on_confirm)
+    guard = RuntimeGuard(policies=policies, on_confirm=on_confirm, persist=persist)
     return guard
 
 

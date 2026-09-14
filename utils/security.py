@@ -272,23 +272,41 @@ class AccessControl:
 
 
 class RateLimiter:
-    """简易速率限制器：单用户每分钟最多 N 次请求"""
+    """简易速率限制器：单用户每分钟最多 N 次请求。
 
-    def __init__(self, max_requests_per_minute: int = 30):
+    带内存防护：定期清理过期 user 键（超过 2 分钟无请求即移除），并对单 user 的
+    历史列表裁剪到不超过 max_rpm，防止大量来源 IP 撑爆 dict / list（内存泄漏/DoS）。
+
+    与 medical_assistant/utils/security.py 的 RateLimiter 保持同一实现——
+    两项目同源，此前一边修了内存防护、另一边没同步，这里补齐，避免镜像项目漂移。
+    """
+
+    def __init__(self, max_requests_per_minute: int = 30, max_users: int = 5000):
         self.max_rpm = max_requests_per_minute
         self._requests: dict[str, list] = {}
+        self.max_users = max_users
+
+    def _sweep(self, now: float) -> None:
+        """清理超过 2 分钟无活动的用户，over 上限时按最久未活动裁剪。"""
+        stale = [u for u, ts in self._requests.items() if now - (ts[-1] if ts else 0) > 120]
+        for u in stale:
+            del self._requests[u]
+        if len(self._requests) > self.max_users:
+            # 按最后活动时间排序，裁剪最久未活动的（保留最近 max_users 个）
+            ordered = sorted(self._requests.items(), key=lambda kv: kv[1][-1] if kv[1] else 0)
+            for u, _ in ordered[: len(self._requests) - self.max_users]:
+                self._requests.pop(u, None)
 
     def allow(self, user_id: str) -> bool:
         """检查是否可以放行"""
         import time
         now = time.time()
-        if user_id not in self._requests:
-            self._requests[user_id] = []
+        if len(self._requests) > self.max_users * 0.8:
+            self._sweep(now)  # 接近上限时先清理，避免无限增长
 
-        self._requests[user_id] = [
-            t for t in self._requests[user_id]
-            if now - t < 60
-        ]
+        # 单 user 历史只留最近 max_rpm 条，避免单键无限累积
+        hist = self._requests.get(user_id) or []
+        self._requests[user_id] = [t for t in hist if now - t < 60][-self.max_rpm:]
 
         if len(self._requests[user_id]) >= self.max_rpm:
             return False
