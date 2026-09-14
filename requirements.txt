@@ -4,8 +4,13 @@
 # === LLM API ===
 openai>=1.0.0
 
-# === 向量数据库 ===
-chromadb>=0.4.0
+# === 向量检索 ===
+# 自研确定性向量库（rag/chroma_store.py）：SQLite 持久层 + FAISS 内存索引。
+# 注意：代码中直接 import faiss，故此依赖为必需——漏装会导致启动即报错。
+faiss-cpu>=1.7.0
+# ChromaDB 已弃用（异步 compaction 段文件不落盘、本机无 MSVC 无法安装），
+# 代码中已不再 import chromadb，故不再列为依赖；如需回退旧实现再打开下面一行。
+# chromadb>=0.4.0
 
 # === Embedding & 视觉模型 ===
 # 视觉统一走 DeepSeek 多模态 API，本地 Qwen2-VL 及 qwen-vl-utils 已移除。
@@ -40,9 +45,8 @@ pytest>=8.0.0
 # === LangChain（Chunker 择优合并自 LangChain 版——RecursiveCharacterTextSplitter 默认启用） ===
 langchain-text-splitters>=0.3.0
 
-# === 可选：LangChain 完整版（项目二/langchain对比实验需要） ===
+# === 可选：LangChain 完整版（对比实验需要） ===
 # langchain>=1.0.0
 # langchain-community>=0.4.0
 # langchain-openai>=1.0.0
 # langchain-classic>=1.0.0
-# faiss-cpu>=1.7.0

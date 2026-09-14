@@ -7,7 +7,7 @@
 <p>
   <img alt="Python" src="https://img.shields.io/badge/Python-3.11+-ffd43b?style=flat-square&logo=python&logoColor=white">
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-0.100+-009688?style=flat-square&logo=fastapi&logoColor=white">
-  <img alt="ChromaDB" src="https://img.shields.io/badge/ChromaDB-vector%20store-9b59b6?style=flat-square">
+  <img alt="VectorStore" src="https://img.shields.io/badge/VectorStore-SQLite%2BFAISS-9b59b6?style=flat-square">
   <img alt="License" src="https://img.shields.io/badge/License-MIT-green?style=flat-square">
   <img alt="RAG" src="https://img.shields.io/badge/Multi--Modal-RAG-3b82f6?style=flat-square">
 </p>
@@ -25,9 +25,9 @@
 > **为什么做**：传统报销审核依赖人工逐单核对，效率低、标准不一、且难以追溯。本项目把**确定性规则**作为第一道防线——规则能判定的绝不让模型拍板，从根上解决"AI 审核不可解释、不可控"的痛点。
 
 **三条设计底线**
-1. **规则优先**：机械性、确定性的判定全部由规则引擎完成，`0% 依赖 LLM`;
+1. **规则优先**：机械性、确定性的判定全部由规则引擎完成，**不经 LLM**（离线基准可复现，见「评估与量化」）；
 2. **逐条可解释**：每个条目单独给出「通过 / 异常 / 需人工」结论 + 理由 + **归因标签**（规则 or 模型）；
-3. **安全可控**：模型只输出审计**意图**，实际数据访问与执行权归 Runtime，经多道闸门校验后才放行。
+3. **安全可控**：模型只输出审计**意图**，实际数据访问与执行权归 Runtime，经七道闸门校验后才放行（**未注册的操作默认拒绝**）。
 
 ---
 
@@ -41,14 +41,20 @@
 | **LLM 仅兜底** | 仅当规则无法覆盖（如解释性例外、模糊描述）才调用大模型，结果单独标注来源 |
 
 ### 🛡️ 可控与可审计
-- **权限闸门**：模型只输出审计意图，执行权归 Runtime，多道闸门校验后放行（`ALLOW / CONFIRM / DENY` 三档）
-- **脱敏与审计**：敏感字段脱敏、操作全程审计留痕、幂等与回滚保障
-- **防 Prompt 注入**：输入扫描 + 高危指令隔离 + 分界符号，阻断"把模型当后门"的注入攻击
+- **权限闸门**：模型只输出审计**意图**，执行权归 Runtime。七道闸门依次校验——**① 工具白名单（未注册即拒）② 身份 ③ 角色 / Scope ④ 参数 Schema（含路径越界）⑤ 风险分级 ⑥ 人工审批 ⑦ 限流 / 预算**，结论为 `ALLOW / CONFIRM / DENY` 三档
+- **执行后治理**：返回结果最小化脱敏（递归覆盖手机号 / 证件号 / 银行卡 / 金额）、操作全程审计留痕、**幂等与预算落 SQLite（跨进程重启仍生效）**、写操作可登记回滚钩子
+- **防 Prompt 注入**：输入与检索结果**双向**扫描 + 高危指令隔离 + 分界符号，阻断"把模型当后门"的注入攻击
+
+### ⚙️ 工程健壮性
+- **客户端断开即止损**：流式端点检测到客户端断开后**立即停止 LLM 生成**，不再为已离开的用户烧 token
+- **流式不阻塞事件循环**：同步 LLM 流经「后台线程 + 队列」转为异步迭代，流式期间其他并发请求不受影响
+- **内存有界**：限流器带定期 sweep 与用户数上限、上传任务表按上限裁剪、权限闸门内部状态均设硬上限与令牌有效期
+- **容器化部署**：多阶段构建 `Dockerfile` + `docker-compose`（镜像只含代码与环境，数据卷挂载持久化）
 
 ### 📄 多模态数据底座
-- 内置多模态 RAG 底层：多格式文档解析（PDF / Word / Excel / PPT / 图片 / OCR）、向量检索、冲突检测
+- 内置多模态 RAG 底层：多格式文档解析（PDF / Word / Excel / PPT / 图片 / OCR）、**双路检索（向量 + BM25）+ RRF 融合**、精排、冲突检测
 - **票据图片识图解析**：提取发票号、金额、供应商、日期等结构化字段
-- ChromaDB 向量库 + SQLite 业务库（知识库 / 审计记录）
+- **自研确定性向量库**：SQLite（WAL，事务提交即落盘）+ FAISS（内存索引，每次改动从 SQLite 重建）——替代 ChromaDB，规避其异步 compaction 导致段文件不落盘的损坏风险
 
 ### 🔐 LLM 配置灵活（非绑定某一家）
 - 支持任意 **OpenAI 兼容端点**（DeepSeek / 通义 / Kimi / 本地 vLLM 等）
@@ -96,12 +102,14 @@
 [模型]  ── 只输出审计意图(意图JSON)
            │
            ▼
-[Runtime]  ── 七道闸门校验：鉴权 / 权限 / 范围 / 脱敏 / 幂等 / 回滚 / 审计
-           │  ├─ 放行 → ALLOW
-           │  ├─ 需确认 → CONFIRM
-           │  └─ 拒绝 → DENY
+[Runtime]  ── 七道闸门：白名单 → 身份 → 角色/Scope → 参数Schema → 预算 → 风险分级 → 审批
+           │  ├─ 全部通过 → ALLOW
+           │  ├─ 高危写操作 → CONFIRM（人工确认令牌，15 分钟内有效）
+           │  └─ 任一不过 → DENY（默认拒绝：未注册的操作一律拒绝）
            ▼
 [registry.execute]  ── 唯一执行通道，模型无直接权限
+           ▼
+[执行后]  ── 结果脱敏 · 审计落库 · 幂等/预算持久化 · 写操作登记回滚钩子
 ```
 确保模型永远无法越权访问真实数据。
 
@@ -116,8 +124,9 @@
 |----|------|
 | 后端 | Python 3.11+ · FastAPI · Uvicorn |
 | LLM | OpenAI 兼容客户端（可切换任意厂商） |
-| 向量库 | ChromaDB |
-| 业务库 | SQLite（知识库 / 审计记录） |
+| 向量库 | **自研：SQLite（WAL 持久层）+ FAISS（内存索引）** |
+| 业务库 | SQLite（知识库 / 审计记录 / 幂等与预算状态） |
+| 部署 | Docker（多阶段构建）+ docker-compose |
 | 前端 | 原生 HTML / CSS / JS（无框架，零依赖） |
 | 文档解析 | pdf-parse / pdfjs-dist / tesseract.js / canvas |
 
@@ -148,18 +157,23 @@ cp .env.example .env            # 或直接在界面右上角「⚙ API配置」
 ### 运行测试
 
 ```bash
-# 回归测试（48 项：核心模块 / Agent 推理 / 权限闸门 / 冲突消解 / 集成链路）
+# 回归测试（52 项：核心模块 / Agent 推理 / 权限闸门 / 冲突消解 / 流式适配 / 集成链路）
 pytest tests/ -v
 
 # 离线基准（规则引擎审计能力：allow/deny 闸门真实生效）
 python reimbursement/benchmark.py
 ```
 
+> 其中 3 项用例需要 `LLM_API_KEY`（校验真实 LLM 客户端初始化），未配置环境变量时会失败，属预期行为。
+
 ### 启动
 
 ```bash
-# 启动 API 服务
+# 方式一：本地启动
 uvicorn api:app --port 8000
+
+# 方式二：Docker（推荐，环境一致）
+docker compose up -d
 ```
 
 打开浏览器访问：[http://localhost:8000/reimburse](http://localhost:8000/reimburse)（报销审核工作台）
@@ -212,12 +226,15 @@ multimodal_rag/
 │   ├── rag_store.py       #   报销知识库向量检索
 │   ├── reimbursement_rules.json  # 规则配置
 │   └── benchmark.py       # 审计能力基准测试
-├── core/                  # Agent 框架 + LLM 客户端（热更新）
-├── rag/                   # 底层 RAG 检索 / 冲突检测 / 分块 / 精排
+├── core/                  # Agent 框架 / 权限闸门 / LLM 客户端（热更新）/ 持久化
+├── rag/                   # 底层 RAG 检索 / 冲突检测 / 分块 / 精排 / 向量库
 ├── memory/                # 记忆系统（短期/情景/长上下文）
 ├── tools/                 # Agent 工具（RAG 工具/计算器/识图）
 ├── eval/                  # 四维评估 + 三类样本集
 ├── utils/                 # 安全 / 日志 / 追踪 / 装饰器
+├── tests/                 # pytest 回归（52 项）
+├── Dockerfile             # 多阶段构建镜像
+├── docker-compose.yml     # 一键编排（数据卷挂载）
 ├── launcher.py            # 一键启动 + 服务管理
 ├── setup.html             # 首次配置引导页
 └── README.md
@@ -227,15 +244,17 @@ multimodal_rag/
 
 ## 🧪 评估与量化
 
-| 维度 | 口径 | 数值 |
+| 维度 | 口径 | 说明 |
 |------|------|------|
-| 规则判定占比 | 全部结论由确定性规则得出 | **~100%** |
-| LLM 兜底占比 | 仅规则无法覆盖时 | 极低（仅兜底） |
-| 发票查重 | 重复发票拦截 | 命中即拒 |
-| 供应商黑名单 | 命中即拒 | 审计能力 |
-| 双通道审计 | 规则 vs LLM 归因 | 可追踪到每一分钱 |
+| 规则判定占比 | 机械性判定是否走 LLM | **不经 LLM**（金额 / 类别 / 日期 / 查重等确定性分支） |
+| LLM 调用量 | 语义模糊点才介入 | 由 `service.py` 的 `llm_used` 计数，可逐单核对 |
+| 发票查重 | 重复发票 | 命中即判 `DUPLICATE_INVOICE` |
+| 供应商黑名单 | 命中黑名单 | 直接拒绝，不进入后续流程 |
+| 双通道归因 | 规则 vs 模型 | 每条结论标注来源，可追踪 |
 
-配套 `reimbursement/benchmark.py` 离线基准测试，可验证规则闸门真实生效（`allow=10 / deny=3` 等用例）。
+配套 `reimbursement/benchmark.py` 离线基准，可复现规则闸门真实生效（含 `allow=10 / deny=3` 等结构化用例）。
+
+RAG 问答侧另有 `eval/` 四维评估（忠实度 / 相关性 / 上下文精度 / 引用准确率）+ 幻觉检测器 + 三类针对性样本集（易误读 / 冲突 / 拒答），可用 `python eval/run_evaluation.py` 复跑；其中不使用 LLM 的维度支持 `--no-llm` 离线先验检索层。
 
 ---
 
@@ -246,6 +265,8 @@ multimodal_rag/
 - **异常不泄露栈**：异常详情记服务器日志，对外 `detail=None`
 - **records 端点鉴权**：默认本地回环保护，配置 API_KEY 后升级为鉴权
 - **注入防护**：`utils/security.py` 扫描 + 隔离 + 分界符号
+- **审计脱敏**：入审计库前递归扫描参数全部字符串值，命中手机号 / 证件号 / 银行卡 / 金额即打码
+- **资源上限**：限流器、上传任务表、权限闸门内部状态均设硬上限，防内存无限增长
 
 ---
 
@@ -254,7 +275,7 @@ multimodal_rag/
 - [ ] 接入真鉴权（JWT / OAuth）替代本地回环保护
 - [ ] 规则引擎可视化运营后台（规则可配置热更新）
 - [ ] 对接电子发票查验接口（验真）
-- [ ] 多租户隔离与角色分级
+- [ ] 权限模型已有角色 / Scope / 租户字段，待补**多租户数据面隔离**（向量库与审计按租户分库）
 
 ---
 
