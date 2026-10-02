@@ -32,34 +32,37 @@ print("=" * 52)
 print("  财务报销审核平台")
 print("=" * 52)
 
-if not os.path.exists(env_file):
-    print("\n  ⚠ 首次启动，正在打开配置页面...")
-    print("  填写后点击保存，服务将自动就绪\n")
+# 判断依据是"有没有可用的 LLM 配置"，而非".env 文件是否存在"：
+# 文件在但 LLM_API_KEY 为空时，Gradio/Agent 初始化会失败，只能走 /setup 补配。
+_needs_setup = not os.getenv("LLM_API_KEY")
+
+# 无论是否已配置都先拉起 API：未配置时它以"降级模式"运行，仅 /setup 等配置类端点可用。
+subprocess.Popen([sys.executable, "-m", "uvicorn", "api:app",
+                  "--host", os.getenv("HOST", "0.0.0.0"), "--port", API_PORT],
+                 stdout=open(os.devnull, "w"), stderr=subprocess.STDOUT,
+                 close_fds=True)
+
+if _needs_setup:
+    print("\n  ⚠ 尚未配置 LLM，正在打开配置页面...")
+    print("  填写后点击保存，服务将自动就绪，无需重启\n")
+    time.sleep(2)
     webbrowser.open(f"http://localhost:{API_PORT}/setup")
 else:
     print("\n  ✅ 配置已就绪\n")
     # 拉起问答界面(Gradio,自足:直接走 Agent,不依赖 API)
     subprocess.Popen([sys.executable, "app.py"],
-                     stdout=open("/dev/null", "w"), stderr=subprocess.STDOUT,
+                     stdout=open(os.devnull, "w"), stderr=subprocess.STDOUT,
                      close_fds=True)
-    # 拉起 API 服务(供外部集成 / curl 调用)
-    subprocess.Popen([sys.executable, "-m", "uvicorn", "api:app",
-                      "--host", os.getenv("HOST", "0.0.0.0"), "--port", API_PORT],
-                     stdout=open("/dev/null", "w"), stderr=subprocess.STDOUT,
-                     close_fds=True)
-
     print(f"  🌐 问答界面  {UI_URL}")
     print(f"  🔌 API 服务  http://localhost:{API_PORT}")
-    print("  ⚠  请勿关闭此窗口，关闭即停止服务；最小化即可")
-
-    # 等 3 秒让 Gradio 起来，再自动打开问答界面
     time.sleep(3)
     webbrowser.open(UI_URL)
 
-    try:
-        input("按回车键停止所有服务并退出...\n")
-    except (EOFError, KeyboardInterrupt):
-        pass
+print("  ⚠  请勿关闭此窗口，关闭即停止服务；最小化即可")
+
+try:
+    input("\n按回车键停止所有服务并退出...\n")
+except (EOFError, KeyboardInterrupt):
+    pass
 
 print("\n服务已停止。")
-

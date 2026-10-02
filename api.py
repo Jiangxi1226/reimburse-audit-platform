@@ -115,40 +115,57 @@ def _remember_upload_task(task_id: str, info: dict) -> None:
         _upload_tasks.pop(next(iter(_upload_tasks)), None)
 
 
+# 运行时单例：降级启动（尚未配置 LLM）时保持 None，由 /setup 保存配置后重建
+agent = None
+rag_tool = None
+session_mgr = None
+
+
+def _build_runtime() -> None:
+    """构建 Agent / RAG / 工具注册表。失败时抛异常，由调用方决定是否降级。"""
+    global agent, rag_tool, session_mgr
+    llm = LLM()
+    rag_tool = RAGTool()
+    registry = ToolRegistry()
+    registry.register(rag_tool)
+    registry.register(CalculatorTool())
+    registry.register(ImageAnalysisTool(llm))
+    registry.register(ReimbursementTool())
+    # Runtime 权限闸门：API 默认 deny（对话内高险写操作被拦截，体现"模型只出意图"），
+    # 信任基线 analyst——可检索、可计算，不能写入知识库；上传走独立 /v1/upload 端点。
+    registry.set_guard(build_guard(rag_tool=rag_tool, on_confirm="deny", persist=True))
+    registry.set_ctx_default(make_ctx(role="analyst", user_id="api_default"))
+    agent = ReactAgent(name="财务报销审核助手", llm=llm, tool_registry=registry)
+    session_mgr = SessionManager(llm)
+
+
+def _prewarm_index() -> None:
+    """预热报销问答的向量索引：启动即建好，避免"首问才建索引"卡住 20-30s（用户以为死机）。"""
+    try:
+        import threading
+        def _prewarm():
+            try:
+                from reimbursement import rag_store as reimburse_rag
+                reimburse_rag.semantic_search("预热", top_k=1)
+                print("[启动] 报销向量索引已预热")
+            except Exception as e:
+                print(f"[启动] 向量索引预热失败(将首问时兜底): {e}")
+        threading.Thread(target=_prewarm, daemon=True).start()
+    except Exception as e:
+        print(f"[启动] 预热线程启动失败: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global agent, rag_tool, session_mgr
     try:
-        llm = LLM()
-        rag_tool = RAGTool()
-        registry = ToolRegistry()
-        registry.register(rag_tool)
-        registry.register(CalculatorTool())
-        registry.register(ImageAnalysisTool(llm))
-        registry.register(ReimbursementTool())
-        # Runtime 权限闸门：API 默认 deny（对话内高险写操作被拦截，体现"模型只出意图"），
-        # 信任基线 analyst——可检索、可计算，不能写入知识库；上传走独立 /v1/upload 端点。
-        registry.set_guard(build_guard(rag_tool=rag_tool, on_confirm="deny", persist=True))
-        registry.set_ctx_default(make_ctx(role="analyst", user_id="api_default"))
-        agent = ReactAgent(name="财务报销审核助手", llm=llm, tool_registry=registry)
-        session_mgr = SessionManager(llm)
-        # 预热报销问答的向量索引：启动即建好，避免"首问才建索引"卡住 20-30s（用户以为死机）
-        try:
-            import threading
-            def _prewarm():
-                try:
-                    from reimbursement import rag_store as reimburse_rag
-                    reimburse_rag.semantic_search("预热", top_k=1)
-                    print("[启动] 报销向量索引已预热")
-                except Exception as e:
-                    print(f"[启动] 向量索引预热失败(将首问时兜底): {e}")
-            threading.Thread(target=_prewarm, daemon=True).start()
-        except Exception as e:
-            print(f"[启动] 预热线程启动失败: {e}")
+        _build_runtime()
         print("[启动] Agent + SessionManager 已就绪")
+        _prewarm_index()
     except Exception as e:
+        # 首次启动尚未配置 LLM_API_KEY：不阻断服务，否则 /setup 配置页也进不去（鸡生蛋死锁）。
+        # 降级模式下仅配置类端点可用；在 /setup 保存配置后由 setup_save 重建运行时。
         print(f"[启动] 初始化失败: {e}")
-        raise
+        print("[启动] 服务以降级模式运行，请打开 /setup 填写 LLM 配置")
     yield
 
 
@@ -1064,6 +1081,16 @@ async def setup_save(req: SetupRequest):
         reload_config()  # 热更新，当前进程立即生效
     except Exception:
         pass
+
+    # 首次配置：启动时因缺 key 处于降级模式，这里把运行时补起来，无需重启
+    if agent is None:
+        try:
+            _build_runtime()
+            _prewarm_index()
+            print("[setup] LLM 配置完成，运行时已就绪")
+        except Exception as e:
+            print(f"[setup] 运行时初始化仍失败: {e}")
+
     return {"ok": True, "configured": bool(merged.get("LLM_API_KEY"))}
 
 
