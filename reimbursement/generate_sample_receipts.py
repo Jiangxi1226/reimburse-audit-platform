@@ -6,7 +6,17 @@
 用 PIL 画中文文本发票。
 """
 import os
+from datetime import date, timedelta
 from PIL import Image, ImageDraw, ImageFont
+
+
+def _d(days_ago: int) -> str:
+    """生成"今天-N天"的日期。
+
+    票据日期若硬编码会随时间过期：图片是 2026-08-30 生成的，日期写死 2026-08-01，
+    一个月后再跑端到端就全部超出 30 天报销窗口 → 本应 approve 的被判 manual_review。
+    """
+    return (date.today() - timedelta(days=days_ago)).isoformat()
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _OUT = os.path.join(_THIS_DIR, "sample_receipts")
@@ -41,7 +51,7 @@ def main():
     samples = {
         "住宿_北京_超标.png": [
             "XX酒店住宿发票  №05001234",
-            "客户：张伟    日期：2026-08-01",
+            f"客户：张伟    日期：{_d(2)}",
             "地址：北京市朝阳区建国路88号",
             "房间：标准间 1 晚",
             "住宿费用：¥620.00",
@@ -49,19 +59,19 @@ def main():
         ],
         "餐饮_商务宴请.png": [
             "XX餐厅餐饮发票  №06005678",
-            "日期：2026-08-01",
+            f"日期：{_d(2)}",
             "晚餐 1 桌",
             "金额：¥250.00",
         ],
         "交通_地铁.png": [
             "XX交通电子发票  №07001111",
-            "日期：2026-08-02",
+            f"日期：{_d(3)}",
             "业务：地铁通勤",
             "金额：¥50.00",
         ],
         "个人消费_护肤.png": [
             "XX商场购物小票  №08002222",
-            "日期：2026-08-03",
+            f"日期：{_d(3)}",
             "面膜 / 护肤品",
             "金额：¥300.00",
         ],

@@ -638,6 +638,44 @@ async def reimburse_record_detail(request: Request, rec_id: str):
         return ReimburseRecordListResponse(ok=False, records=[], total=0, error=str(e))
 
 
+class ReimburseReviewRequest(BaseModel):
+    final_decision: str = Field(..., description="人工终判 approve|partial|reject|manual_review")
+    reviewer: str = Field("", description="复核人（可选）")
+    note: str = Field("", description="复核备注（可选）", max_length=500)
+
+
+class ReimburseReviewResponse(BaseModel):
+    ok: bool
+    record: dict | None = None
+    stats: dict = Field(default_factory=dict)
+    error: str = ""
+
+
+@app.post("/v1/reimburse/records/{rec_id}/review", response_model=ReimburseReviewResponse)
+async def reimburse_record_review(request: Request, rec_id: str, body: ReimburseReviewRequest):
+    """回填人工终判，形成"规则建议 → 人工终判"闭环（供统计规则一致率）。含隐私，默认本机保护。"""
+    _guard_local_or_auth(request)
+    try:
+        r = reimburse_records.apply_review(rec_id, body.final_decision,
+                                           reviewer=body.reviewer, note=body.note)
+        if not r.get("ok"):
+            return ReimburseReviewResponse(ok=False, error=r.get("error", "回填失败"))
+        return ReimburseReviewResponse(ok=True, record=r.get("record"),
+                                       stats=reimburse_records.review_stats())
+    except Exception as e:
+        return ReimburseReviewResponse(ok=False, error=str(e))
+
+
+@app.get("/v1/reimburse/review_stats", response_model=ReimburseReviewResponse)
+async def reimburse_review_stats(request: Request):
+    """复核统计：一致率、规则偏严/偏松分布、被推翻最多的规则。含隐私，默认本机保护。"""
+    _guard_local_or_auth(request)
+    try:
+        return ReimburseReviewResponse(ok=True, stats=reimburse_records.review_stats())
+    except Exception as e:
+        return ReimburseReviewResponse(ok=False, error=str(e))
+
+
 @app.post("/v1/reimburse/ask", response_model=ReimburseAskResponse)
 async def reimburse_ask(req: ReimburseAskRequest):
     """对单笔审核做**确定性**问答（读该笔核定记录 + 规则直接回答，0 LLM、可验证）。"""

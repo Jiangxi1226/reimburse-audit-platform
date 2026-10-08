@@ -22,7 +22,7 @@ from reimbursement.invoice_parser import parse_receipt, to_audit_items
 _LLM_ARBITRATE_PROMPT = '''你是财务报销审核裁决助手。下面是确定性规则引擎已给出一份初判结论，
 以及一个"语义模糊点"（无法用硬规则判定、需要理解业务意图的问题）。请只针对这个模糊点裁决，输出 JSON：
 
-{"is_legitimate": true/false, "reason": "一段话说明"}
+{{"is_legitimate": true/false, "reason": "一段话说明"}}
 
 模糊点：{ambiguity}
 规则初判摘要：{summary}
@@ -151,6 +151,7 @@ def audit_claim(items: list[dict] = None, receipt_files: list[str] = None,
                     "description": arbit_final.get("reason", "业务相关性存疑，转人工复核"),
                     "severity": "medium",
                 })
+                verdict["issue_count"] = len(verdict["issues"])
                 verdict["summary"] += "；存在业务相关性存疑，转人工复核"
             elif not arbit_final:
                 # LLM 兜底失败 → 显式降级标记（对齐项目二"绝不静默失败"，审计可追溯）
@@ -159,6 +160,12 @@ def audit_claim(items: list[dict] = None, receipt_files: list[str] = None,
                     "description": "语义兜底调用失败，未得到裁决，建议人工复核该模糊点",
                     "severity": "medium",
                 })
+                # 兜底失败=无法确认业务相关性 → 结论同步降级为待人工复核。
+                # 否则 summary 说"待人工复核"而 decision 仍是 approve，前端只读
+                # decision 会把存疑单据直接放行（言行不一）。
+                if verdict.get("decision") == "approve":
+                    verdict["decision"] = "manual_review"
+                verdict["issue_count"] = len(verdict["issues"])
                 verdict["summary"] += "；语义兜底失败，待人工复核"
         stages["arbitrate"] = round((time.perf_counter() - t_s) * 1000, 1)
 

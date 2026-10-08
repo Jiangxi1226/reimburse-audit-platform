@@ -74,10 +74,14 @@ class ContentFilter:
             if found:
                 matches.append(str(pattern.pattern)[:60])
 
-        if not matches:
+        # 高危表比通用表更宽（如 `忽略\s*(所有|之前|上面|以上).*` 能覆盖"忽略之前的
+        # 所有指令"，但通用表要求"忽略"后紧跟"指令/规则"，中间隔着"的所有"就不命中）。
+        # 必须先算 high_hit 再判空：否则这类句式会因 matches 为空被提前判 safe，
+        # 高危表形同虚设——实测曾漏检"忽略之前的所有指令"这句最经典的中文注入。
+        high_hit = any(p.search(text) for p in _HIGH_RISK_COMPILED)
+        if not matches and not high_hit:
             return {"safe": True, "matches": [], "risk": "none"}
         # 命中高危指令(直接身份越权/角色扮演) → high；否则按命中数量 medium/high
-        high_hit = any(p.search(text) for p in _HIGH_RISK_COMPILED)
         if high_hit:
             risk = "high"
         elif len(matches) >= 2:

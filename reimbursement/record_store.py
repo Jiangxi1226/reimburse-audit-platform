@@ -105,6 +105,87 @@ def save_record(inputs: dict, verdict: dict, llm_used: bool,
     return record
 
 
+# ---------------- 人工复核回流（闭环） ----------------
+# "规则建议 → 人工终判"的反馈：没有它，manual_review 就是个黑洞——规则说"待人工
+# 复核"，之后无人知晓到底批没批，规则也无从校准。回填后即可统计一致性、定位
+# 哪条规则总被人工推翻。
+
+# 负面程度：越大越"拒"。用于判定规则是偏严还是偏松。
+_SEVERITY = {"approve": 0, "partial": 1, "manual_review": 2, "reject": 3}
+
+
+def _agreement(rule_decision: str, final_decision: str) -> str:
+    """规则建议 vs 人工终判的关系：agree / rule_strict(规则偏严) / rule_lenient(规则偏松)。
+
+    按负面程度比较：终判比规则建议更正面 → 规则偏严（动不动就拒）；
+    更负面 → 规则偏松（放得太松）。
+    """
+    a = _SEVERITY.get(rule_decision, 1)
+    b = _SEVERITY.get(final_decision, 1)
+    if b == a:
+        return "agree"
+    return "rule_strict" if b < a else "rule_lenient"
+
+
+def apply_review(rec_id: str, final_decision: str, reviewer: str = "",
+                 note: str = "") -> dict:
+    """回填某条记录的**人工终判**，形成"规则建议 → 人工终判"的闭环。
+
+    final_decision: approve | partial | reject | manual_review
+    返回 {ok, record} 或 {ok: False, error}。
+    """
+    fd = (final_decision or "").strip()
+    if fd not in _SEVERITY:
+        return {"ok": False,
+                "error": f"非法终判：{final_decision}（可选 approve/partial/reject/manual_review）"}
+    with _lock:
+        recs = _load()
+        for r in recs:
+            if r.get("id") == rec_id:
+                r["review"] = {
+                    "final_decision": fd,
+                    "reviewer": (reviewer or "").strip(),
+                    "note": (note or "").strip(),
+                    "ts": _now(),
+                    "agreement": _agreement(str(r.get("decision", "")), fd),
+                }
+                _save(recs)
+                return {"ok": True, "record": r}
+    return {"ok": False, "error": f"记录不存在：{rec_id}"}
+
+
+def review_stats() -> dict:
+    """复核统计：一致率、规则偏严/偏松分布、被推翻最多的规则编码。
+
+    回答"规则判错了怎么发现"：一致率低、或某规则命中后总被推翻 → 该规则需校准。
+    """
+    recs = _load()
+    reviewed = [r for r in recs if r.get("review")]
+    pending = [r for r in recs
+               if r.get("decision") == "manual_review" and not r.get("review")]
+    total = len(reviewed)
+    agree = sum(1 for r in reviewed if r["review"].get("agreement") == "agree")
+    strict = sum(1 for r in reviewed if r["review"].get("agreement") == "rule_strict")
+    lenient = sum(1 for r in reviewed if r["review"].get("agreement") == "rule_lenient")
+    # 被推翻最多的规则编码：不一致记录中命中的 policy_refs 计数
+    by_policy: dict[str, int] = {}
+    for r in reviewed:
+        if r["review"].get("agreement") == "agree":
+            continue
+        for code in (r.get("policy_refs") or []):
+            by_policy[code] = by_policy.get(code, 0) + 1
+    return {
+        "total_records": len(recs),
+        "reviewed": total,
+        "pending_review": len(pending),          # 待人工复核但尚未回填
+        "agree": agree,
+        "rule_strict": strict,                   # 规则偏严（人工判得更宽）
+        "rule_lenient": lenient,                 # 规则偏松（人工判得更严）
+        "agreement_rate": (agree / total * 100) if total else None,
+        "top_overridden_policies": sorted(by_policy.items(), key=lambda kv: -kv[1])[:5],
+    }
+
+
 # ---------------- 检索 ----------------
 
 def list_records(keyword: str = "", decision: str = "", limit: int = 50,
