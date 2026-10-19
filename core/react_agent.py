@@ -52,6 +52,195 @@ class ReactAgent(Agent):
             return self._run_function_calling(user_input, context, trace_id, ctx)
         return self._run_react(user_input, context, trace_id, ctx)
 
+    # ------------------------------------------------------------------
+    # 流式版：逐 token 产出"最终作答"，供前端做打字机效果（豆包式）。
+    # 检索步(工具调用)与 run() 完全一致，只有最终作答那一步改成 stream=True。
+    # run() 原样保留，回归测试不受影响。
+    # ------------------------------------------------------------------
+    def run_stream(self, user_input: str, ctx: AccessContext = None):
+        """产出事件 (event, payload)：
+          ("delta", 累积到当前的答案文本)  最终作答逐步吐出
+          ("reset", None)                 当前步被判定为工具调用/过早完成，前面已吐的文本作废
+          ("final", {answer, steps, latency_ms, trace, degraded})
+        """
+        if ctx is None:
+            ctx = AccessContext(user_id="anonymous", role="guest")
+        trace_id = self.tracer.start_trace(user_input, self.name)
+        context = self.memory.get_context()
+        if self.use_fc:
+            yield from self._fc_stream(user_input, context, trace_id, ctx)
+        else:
+            answer = self._run_react(user_input, context, trace_id, ctx)
+            yield ("final", {"answer": answer, "steps": "?", "latency_ms": 0.0,
+                             "trace": self.get_last_trace_full(), "degraded": False})
+
+    def _fc_stream(self, user_input: str, context: str, trace_id: str, ctx: AccessContext):
+        base_prompt = (
+            f"你是{self.name}，用中文回答。可用工具见 tools 列表。\n"
+            "行为约束：\n"
+            "1. 每次只调用一个工具，根据返回结果决定下一步。\n"
+            "2. 如果连续两次检索返回高度重叠的内容，说明信息已经足够——请直接回答，不要重复搜索。\n"
+            "3. 如果工具返回错误（❌开头），分析错误原因后换一个工具或参数，不要重试同样的调用。\n"
+            "4. 如果已经收集了足够信息回答用户问题，立即 Finish，不要做多余的检索。\n"
+            "5. 如果两个工具都能完成任务，选择最直接的那个——不要为了调而调。\n"
+            "6. 当用户问题涉及'和...什么关系'、'影响/驱动因素'这类多跳推理时，优先用 rag.search_graph 而非 rag.search——它能在跨文档实体间建立逻辑联系。"
+        )
+        try:
+            from rag.query_classifier import get_classifier
+            base_prompt += "\n\n" + get_classifier().get_prompt(user_input)
+        except Exception:
+            pass
+
+        messages = [
+            {"role": "system", "content": base_prompt},
+            {"role": "user", "content": f"上下文:\n{context}\n\n问题: {user_input}"}
+        ]
+        tools_schema = self._build_tools_schema()
+        last_action = None
+        last_3_actions: list[str] = []
+        consecutive_same = 0
+        best_answer = None
+        best_answer_score = 0.0
+        t0 = time.perf_counter()
+
+        for step in range(self.max_steps):
+            step_start = time.perf_counter()
+            try:
+                stream = self.llm.client.chat.completions.create(
+                    model=self.llm.model, messages=messages,
+                    tools=tools_schema, temperature=0.3, stream=True,
+                )
+            except Exception as e:
+                print(f"[网络错误] FC 流式调用失败 ({e})，降级 ReAct...")
+                yield ("reset", None)
+                ans = self._run_react(user_input, context, trace_id, ctx=ctx)
+                yield ("final", {"answer": ans, "steps": "?", "latency_ms": (time.perf_counter() - t0) * 1000,
+                                 "trace": self.get_last_trace_full(), "degraded": True})
+                return
+
+            content = ""
+            tc_acc: list[dict] = []   # 按 index 累积流式 tool_calls 分片
+            try:
+                for chunk in stream:
+                    if not getattr(chunk, "choices", None):
+                        continue
+                    delta = chunk.choices[0].delta
+                    dcontent = getattr(delta, "content", None)
+                    if dcontent:
+                        content += dcontent
+                        yield ("delta", content)
+                    for t in (getattr(delta, "tool_calls", None) or []):
+                        idx = getattr(t, "index", 0) or 0
+                        while len(tc_acc) <= idx:
+                            tc_acc.append({"id": None, "name": "", "args": ""})
+                        if getattr(t, "id", None):
+                            tc_acc[idx]["id"] = t.id
+                        fn = getattr(t, "function", None)
+                        if fn is not None:
+                            if getattr(fn, "name", None):
+                                tc_acc[idx]["name"] += fn.name
+                            if getattr(fn, "arguments", None):
+                                tc_acc[idx]["args"] += fn.arguments
+            except Exception as e:
+                print(f"[流中断] ({e})，降级 ReAct...")
+                yield ("reset", None)
+                ans = self._run_react(user_input, context, trace_id, ctx=ctx)
+                yield ("final", {"answer": ans, "steps": "?", "latency_ms": (time.perf_counter() - t0) * 1000,
+                                 "trace": self.get_last_trace_full(), "degraded": True})
+                return
+            latency = (time.perf_counter() - step_start) * 1000
+            has_tool = any(t["name"] for t in tc_acc)
+
+            # —— 最终作答：无工具调用 ——
+            if content and not has_tool:
+                if step < self.min_steps:
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append({"role": "user", "content": (
+                        "你似乎还没有调用任何工具来检索信息。请先检索相关知识再回答。"
+                        "如果确实不需要检索，请再次以 Finish 结束并说明理由。"
+                    )})
+                    self.tracer.log_step(step + 1, "Finish(过早)", "(被拦截)",
+                                         "步数不足，要求继续检索", latency_ms=latency, success=False)
+                    yield ("reset", None)
+                    continue
+                self.tracer.log_step(step + 1, content[:100], "Finish", "任务完成", latency_ms=latency)
+                self.tracer.end_trace(content, success=True)
+                self.memory.add_message("user", user_input)
+                self.memory.add_message("assistant", content)
+                yield ("final", {"answer": content, "steps": step + 1,
+                                 "latency_ms": (time.perf_counter() - t0) * 1000,
+                                 "trace": self.get_last_trace_full(), "degraded": False})
+                return
+
+            # —— 工具调用步 ——
+            if has_tool:
+                if content:
+                    yield ("reset", None)          # 工具调用前若吐了前导文本，作废
+                t = tc_acc[0]
+                fname = t["name"]
+                try:
+                    args = json.loads(t["args"] or "{}")
+                except Exception:
+                    args = {}
+                tool_name, action_name = self._split_fc_name(fname)
+                args.pop("action", None)
+                action_key = f"{tool_name}.{action_name}"
+                consecutive_same = consecutive_same + 1 if action_key == last_action else 0
+                last_action = action_key
+                last_3_actions.append(action_key)
+                if len(last_3_actions) > 3:
+                    last_3_actions = last_3_actions[-3:]
+
+                observation, success = self._execute_with_retry(tool_name, action_name, args, step + 1, ctx)
+                scan = ContentFilter.scan(observation)
+                if not scan["safe"]:
+                    observation = ContentFilter.sanitize(observation)
+                self.tracer.log_step(step + 1, f"FC: {tool_name}.{action_name}({args})",
+                                     f"{tool_name}.{action_name}", observation,
+                                     latency_ms=latency, success=success)
+                self.memory.add_tool_result(tool_name, observation, success)
+
+                tc_obj = {"id": t["id"] or f"call_{step}", "type": "function",
+                          "function": {"name": fname, "arguments": t["args"] or "{}"}}
+                messages.append({"role": "assistant", "content": None, "tool_calls": [tc_obj]})
+                messages.append({"role": "tool", "tool_call_id": tc_obj["id"], "content": observation})
+
+                score = self._score_observation(observation)
+                if score > best_answer_score:
+                    best_answer_score = score
+                    best_answer = observation
+
+                if consecutive_same >= self.max_consecutive_similar:
+                    messages.append({"role": "user", "content": (
+                        f"你已经连续 {consecutive_same} 次调用了 {action_key}。"
+                        "已收集了足够的信息。请基于现有检索结果给出最终答案，不要再调用工具。"
+                    )})
+                    consecutive_same = 0
+                if len(last_3_actions) == 3:
+                    if last_3_actions[0] == last_3_actions[2] and last_3_actions[0] != last_3_actions[1]:
+                        messages.append({"role": "user", "content": (
+                            f"检测到你反复在 {last_3_actions[0]} 和 {last_3_actions[1]} 之间切换。"
+                            "这说明你已经有了足够的信息。请基于已有检索结果直接回答用户问题，不要再调用工具。"
+                        )})
+                        last_3_actions = []
+                continue
+
+            # 空响应：既无内容也无工具调用，继续下一步（受 max_steps 约束）
+
+        yield ("reset", None)
+        if best_answer and best_answer_score > 0.3:
+            fallback = (
+                f"经过 {self.max_steps} 步检索，以下是基于已收集信息的部分结果：\n\n"
+                f"{best_answer[:1000]}\n\n（未能在限定步数内完成完整分析，建议缩小问题范围重试）"
+            )
+            self.tracer.end_trace(fallback, success=False, error="max_steps_partial")
+        else:
+            fallback = f"抱歉，在 {self.max_steps} 步内未能完成任务。"
+            self.tracer.end_trace(fallback, success=False, error="max_steps")
+        yield ("final", {"answer": fallback, "steps": self.max_steps,
+                         "latency_ms": (time.perf_counter() - t0) * 1000,
+                         "trace": self.get_last_trace_full(), "degraded": True})
+
 
     def _run_function_calling(self, user_input: str, context: str, trace_id: str,
                               ctx: AccessContext) -> str:
@@ -331,3 +520,8 @@ class ReactAgent(Agent):
     def get_last_trace(self):
         traces = self.tracer.list_traces(limit=1)
         return traces[0] if traces else None
+
+    def get_last_trace_full(self):
+        """最近一次 trace 的完整内容（steps 为明细列表），仅供"推理过程"面板渲染。
+        get_last_trace() 保持原样（steps=数量），api.py 的 ChatResponse.steps 依赖它。"""
+        return self.tracer.get_latest()

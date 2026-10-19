@@ -211,20 +211,76 @@ def _safe_agent_run(message: str) -> tuple[str, str, str]:
 
 
 def _format_trace(trace: dict) -> str:
-    """格式化 Agent 推理跟踪为可读文本。"""
+    """格式化 Agent 推理跟踪为可读文本。
+    steps 可能是明细列表(完整 trace)或数量 int(列表摘要)——两种都兼容，避免迭代 int 崩溃。"""
     if not trace:
         return ""
-    lines = [f"**Trace ID:** {trace.get('trace_id', 'N/A')[:12]}..."]
-    if trace.get("steps"):
-        for s in trace["steps"]:
-            thought = s.get("thought", "")[:80]
+    lines = [f"**Trace ID:** {str(trace.get('trace_id', 'N/A'))[:12]}..."]
+    steps = trace.get("steps")
+    if isinstance(steps, int):
+        lines.append(f"- 共 {steps} 步（明细见服务端日志）")
+    else:
+        for s in (steps or []):
+            thought = str(s.get("thought", ""))[:80]
             action = s.get("action", "")
-            latency = s.get("latency_ms", 0)
+            latency = s.get("latency_ms") or 0
             success = "✓" if s.get("success") else "✗"
             lines.append(f"- {success} **{action}** ({latency:.0f}ms)")
             if thought:
                 lines.append(f"  > {thought}")
     return "\n".join(lines)
+
+
+def _agent_run_stream(message: str):
+    """流式版 _safe_agent_run：yield (kind, payload)，供 Gradio 打字机输出。
+
+      ("delta", 累积答案文本) / ("reset", None) / ("final", {answer,status,trace_summary})
+    支持 /workflow、/hybrid 前缀，行为与 _safe_agent_run 一致；表格里的
+    状态标签(✓ 完成 · N 步 · Xms)与 Agent 推理过程在 final 时给出。
+    """
+    if not message or not message.strip():
+        yield ("final", {"answer": "", "status": "", "trace_summary": ""})
+        return
+
+    use_workflow = message.startswith("/workflow ")
+    use_hybrid = message.startswith("/hybrid ")
+    clean_message = message
+    if use_workflow:
+        clean_message = message[10:]
+    elif use_hybrid:
+        clean_message = message[8:]
+
+    start = time.perf_counter()
+    try:
+        if use_workflow:
+            result = workflow_agent.run(clean_message)
+            steps = len(RAG_WORKFLOW)
+            yield ("delta", result)
+            latency = (time.perf_counter() - start) * 1000
+            yield ("final", {"answer": result,
+                             "status": f"✓ 完成[Workflow] · {steps} 步 · {latency:.0f}ms",
+                             "trace_summary": ""})
+            return
+
+        for evt, payload in agent.run_stream(clean_message):
+            if evt == "delta":
+                yield ("delta", payload)
+            elif evt == "reset":
+                yield ("reset", None)
+            elif evt == "final":
+                latency = (time.perf_counter() - start) * 1000
+                mode_tag = "[Hybrid]" if use_hybrid else ""
+                trace = payload.get("trace")
+                yield ("final", {
+                    "answer": payload.get("answer", ""),
+                    "status": f"✓ 完成{mode_tag} · {payload.get('steps', '?')} 步 · {latency:.0f}ms",
+                    "trace_summary": _format_trace(trace) if trace else "",
+                })
+    except Exception as e:
+        err = f"❌ 系统错误：{str(e)[:300]}\n\n> 网络异常或服务暂时不可用，请稍后重试。"
+        yield ("reset", None)
+        yield ("final", {"answer": err, "status": f"✗ 失败 · {type(e).__name__}",
+                         "trace_summary": f"异常详情：{traceback.format_exc()[-500:]}"})
 
 
 def _safe_upload(file) -> str:
@@ -337,16 +393,33 @@ with gr.Blocks(
             current_sid = gr.State(value=NEW_SESSION)
 
             def chat_with_trace(message, history, sid):
-                history = history or []
+                # 生成器：每个 yield = 一次界面刷新 → Chatbot 逐字更新（豆包式打字机）。
+                history = list(history or [])
                 if not message or not message.strip():
-                    return history, "", "", sid, gr.Dropdown(choices=_session_choices(), value=sid)
+                    yield history, "", "", sid, gr.Dropdown(choices=_session_choices(), value=sid)
+                    return
                 if sid in (None, "", NEW_SESSION):
                     sid = create_session()
-                answer, status, trace_summary = _safe_agent_run(message)
-                save_exchange(sid, message, answer)
                 history.append({"role": "user", "content": message})
-                history.append({"role": "assistant", "content": answer})
-                return history, status, trace_summary, sid, gr.Dropdown(choices=_session_choices(), value=sid)
+                history.append({"role": "assistant", "content": ""})
+                yield list(history), "思考中…", "", sid, gr.Dropdown(choices=_session_choices(), value=sid)
+                last_push = 0.0
+                for evt, payload in _agent_run_stream(message):
+                    if evt == "reset":
+                        history[-1]["content"] = ""
+                        yield list(history), "检索中…", "", sid, gr.Dropdown(choices=_session_choices(), value=sid)
+                    elif evt == "delta":
+                        history[-1]["content"] = payload
+                        now = time.perf_counter()
+                        if now - last_push >= 0.05:   # 节流：最多 20 次/秒，避免刷爆前端
+                            last_push = now
+                            yield list(history), "生成中…", "", sid, gr.Dropdown(choices=_session_choices(), value=sid)
+                    elif evt == "final":
+                        answer = payload.get("answer", "")
+                        history[-1]["content"] = answer
+                        save_exchange(sid, message, answer)
+                        yield (list(history), payload.get("status", ""), payload.get("trace_summary", ""),
+                               sid, gr.Dropdown(choices=_session_choices(), value=sid))
 
             def on_new():
                 sid = create_session()

@@ -56,6 +56,21 @@ class TraceLogger:
             except Exception: continue
         return traces
 
+    def get_latest(self) -> dict | None:
+        """读回最近一次落盘的**完整** trace（steps 为明细列表）。
+
+        与 list_traces 的区别：list_traces 把 steps 压成数量(int)供列表展示，
+        这里返回原始结构，供前端"Agent 推理过程"渲染每一步。
+        """
+        try:
+            files = sorted([f for f in os.listdir(self.log_dir) if f.endswith(".json")], reverse=True)
+            if not files:
+                return None
+            with open(os.path.join(self.log_dir, files[0]), "r", encoding="utf-8") as fp:
+                return json.load(fp)
+        except Exception:
+            return None
+
     def _write_trace(self, trace: dict):
         filepath = os.path.join(self.log_dir, f"{trace['trace_id']}.json")
         with open(filepath, "w", encoding="utf-8") as f:
