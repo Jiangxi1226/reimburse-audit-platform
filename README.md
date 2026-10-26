@@ -181,6 +181,56 @@ docker compose up -d
 
 ---
 
+## 🔌 MCP 接入（把审核能力标准化为工具）
+
+除了 HTTP API，本项目还把报销审核能力暴露为一个标准 **MCP Server**——
+任何支持 MCP 的客户端（Claude Desktop / Cursor / 其他 Agent）接上即可调用，
+无需了解本项目的 HTTP 契约。
+
+```bash
+python mcp_server.py        # 以 stdio 方式启动 MCP Server
+python mcp_client_demo.py   # 不装任何客户端也能自检整条链路
+```
+
+**暴露的能力**
+
+| 类型 | 名称 | 说明 |
+|------|------|------|
+| tool | `audit_claim` | 审核报销条目 / 票据，返回结构化结论 |
+| tool | `parse_receipt` | 解析票据为结构化字段 + 金额校准 |
+| tool | `policy_lookup` | 查询报销规则（确定性，无 LLM） |
+| resource | `policy://rules` | 规则库只读，客户端可直接读取当上下文 |
+| resource | `policy://capabilities` | 能力清单与身份基线，便于客户端自检 |
+
+**安全设计：MCP 不是旁路**
+
+MCP 客户端传来的只是一次**调用意图**，真正执行仍走
+`ToolRegistry.execute()` → `RuntimeGuard` 的七道闸门（白名单 / 角色 / 参数 schema /
+路径越界 / 风险分级 / 审计 / 幂等）。新增一个入口，**不新增任何绕过闸门的通道**。
+
+身份由**部署方**通过环境变量决定，不接受客户端在请求里自报角色（防提权）：
+
+```bash
+MCP_USER_ROLE=analyst MCP_USER_ID=alice python mcp_server.py
+# REIMBURSEMENT_LLM_FALLBACK=0 可关闭 LLM 兜底，整条链路零 LLM 依赖、可离线运行
+```
+
+Claude Desktop 配置示例：
+
+```json
+{
+  "mcpServers": {
+    "reimbursement-audit": {
+      "command": "python",
+      "args": ["D:/path/to/multimodal_rag/mcp_server.py"],
+      "env": { "MCP_USER_ROLE": "analyst", "PYTHONIOENCODING": "utf-8" }
+    }
+  }
+}
+```
+
+---
+
 ## 📡 API 参考
 
 ### 报销审核

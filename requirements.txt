@@ -39,6 +39,9 @@ gradio>=4.0.0
 # === 工具 ===
 numpy>=1.24.0
 
+# === MCP（把审核能力暴露为标准 MCP Server，供 Claude Desktop / Cursor 等客户端调用） ===
+mcp>=1.0.0
+
 # === 测试 ===
 pytest>=8.0.0
 
