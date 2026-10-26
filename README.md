@@ -5,6 +5,7 @@
 **规则引擎优先 + LLM 兜底的智能报销审核系统** · 逐条核验 · 风险拦截 · 全链路可解释可审计
 
 <p>
+  <a href="https://github.com/Jiangxi1226/reimburse-audit-platform/actions/workflows/tests.yml"><img alt="tests" src="https://github.com/Jiangxi1226/reimburse-audit-platform/actions/workflows/tests.yml/badge.svg"></a>
   <img alt="Python" src="https://img.shields.io/badge/Python-3.11+-ffd43b?style=flat-square&logo=python&logoColor=white">
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-0.100+-009688?style=flat-square&logo=fastapi&logoColor=white">
   <img alt="VectorStore" src="https://img.shields.io/badge/VectorStore-SQLite%2BFAISS-9b59b6?style=flat-square">
