@@ -1,0 +1,31 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # 说明：本项目完整依赖含 torch / transformers / paddleocr 等重型包（约 2GB+），
+      # 在 CI 全量安装耗时且易因系统依赖失败。因此 CI 只跑不依赖模型的纯逻辑用例：
+      #   - test_runtime_guard：权限闸门（纯标准库）
+      #   - test_conflict_resolver：冲突消解（纯标准库）
+      # 需要模型/向量库的用例（pipeline、流式、集成）仍在本地全量执行。
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+
+      - name: Run tests
+        run: python -m pytest tests/test_runtime_guard.py tests/test_conflict_resolver.py -v
